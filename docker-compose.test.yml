@@ -1,0 +1,31 @@
+version: "3.9"
+
+# Run with: docker compose -f docker-compose.test.yml up --build --abort-on-container-exit
+# Exit code mirrors test results (0 = pass, non-zero = fail)
+
+services:
+
+  backend-test:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.test
+    container_name: trendpulse-backend-test
+    environment:
+      - NODE_ENV=test
+      - YOUTUBE_API_KEY=test-youtube-key-12345
+    networks:
+      - test-net
+
+  frontend-test:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.test
+    container_name: trendpulse-frontend-test
+    environment:
+      - CI=true
+    networks:
+      - test-net
+
+networks:
+  test-net:
+    driver: bridge

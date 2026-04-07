@@ -1,0 +1,26 @@
+# Environment files — NEVER commit these
+backend/.env
+
+# Dependencies
+backend/node_modules/
+frontend/node_modules/
+
+# React build output
+frontend/build/
+
+# Docker
+.docker/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
