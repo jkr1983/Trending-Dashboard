@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { formatNum, timeAgo, isValidThumbnail } from "../utils/formatters";
+import "./shared.css";
 import "./YouTube.css";
 
 function VideoCard({ video, index }) {
@@ -57,44 +58,49 @@ export default function YouTube({ data, loading, error }) {
   const videos = data?.[displayCat] || [];
 
   return (
-    <section className="platform-section yt-section">
-      <div className="platform-header">
-        <div className="platform-badge yt-badge">
-          <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18">
-            <path d="M23.5 6.2a3 3 0 0 0-2.1-2.1C19.5 3.5 12 3.5 12 3.5s-7.5 0-9.4.6A3 3 0 0 0 .5 6.2C0 8.1 0 12 0 12s0 3.9.5 5.8a3 3 0 0 0 2.1 2.1c1.9.6 9.4.6 9.4.6s7.5 0 9.4-.6a3 3 0 0 0 2.1-2.1C24 15.9 24 12 24 12s0-3.9-.5-5.8zM9.75 15.5V8.5l6.25 3.5-6.25 3.5z"/>
-          </svg>
-          YouTube
+    <section className="yt-section">
+      <div className="section-header">
+        <div className="section-title">
+          <span className="section-icon">▶️</span>
+          <h2>YouTube</h2>
+          <span className="section-badge">Trending · Past 24h</span>
         </div>
-        <span className="platform-subtitle">Trending Videos</span>
+        <a
+          href="https://www.youtube.com/feed/trending"
+          target="_blank"
+          rel="noreferrer"
+          className="section-link"
+        >
+          youtube.com/trending ↗
+        </a>
       </div>
 
       {error && (
-        <div className="error-box" role="alert">
+        <div className="section-error">
           <span>⚠</span> {error}
         </div>
       )}
 
-      <div className="category-tabs" role="tablist">
-        {loading
-          ? Array(6).fill(0).map((_, i) => (
-              <div key={i} className="skeleton" style={{ width: 80, height: 32, borderRadius: 20 }} />
-            ))
-          : categories.map((cat) => (
-              <button
-                key={cat}
-                role="tab"
-                aria-selected={displayCat === cat}
-                className={`cat-tab ${displayCat === cat ? "active yt-active" : ""}`}
-                onClick={() => setActiveCategory(cat)}
-              >
-                {cat}
-              </button>
-            ))}
+      {/* Category tabs */}
+      <div className="category-tabs">
+        {(loading ? ["All", "Music", "Gaming", "Entertainment", "News & Politics",
+                     "Science & Technology", "Sports", "Comedy", "How-to & Style",
+                     "People & Blogs", "Pets & Animals"] : categories
+        ).map((cat) => (
+          <button
+            key={cat}
+            className={`cat-tab${displayCat === cat ? " active yt-active" : ""}`}
+            onClick={() => setActiveCategory(cat)}
+            disabled={loading}
+          >
+            {cat}
+          </button>
+        ))}
       </div>
 
       <div className="video-grid">
         {loading
-          ? Array(10).fill(0).map((_, i) => <SkeletonCard key={i} />)
+          ? Array.from({ length: 15 }, (_, i) => <SkeletonCard key={i} />)
           : videos.length > 0
             ? videos.map((v, i) => <VideoCard key={v.id} video={v} index={i} />)
             : !error && (

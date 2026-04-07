@@ -7,10 +7,21 @@
 .dashboard-main {
   flex: 1;
   padding: 28px 32px;
-  max-width: 1000px;
+  max-width: 1400px;
   width: 100%;
   margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
   animation: fadeInUp 0.4s ease both;
+}
+
+/* Three-column grid for HN / GitHub / Dev.to */
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 24px;
+  align-items: start;
 }
 
 .app-footer {
@@ -27,7 +38,27 @@
 
 .footer-dot { color: var(--border-glow); }
 
-@media (max-width: 640px) {
-  .dashboard-main { padding: 16px; }
-  .app-footer { flex-wrap: wrap; gap: 6px; }
+/* ── Responsive breakpoints ─────────────────────────────────────────────── */
+
+/* Two columns on medium screens */
+@media (max-width: 1100px) {
+  .dashboard-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+/* Single column on mobile */
+@media (max-width: 720px) {
+  .dashboard-main {
+    padding: 16px;
+    gap: 20px;
+  }
+  .dashboard-grid {
+    grid-template-columns: 1fr;
+    gap: 20px;
+  }
+  .app-footer {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
 }

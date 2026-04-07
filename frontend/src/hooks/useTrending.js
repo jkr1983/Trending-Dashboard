@@ -35,6 +35,7 @@ export function useTrending(platform) {
     return () => clearInterval(interval);
   }, [fetchData]);
 
+  // manualRefresh clears ALL source caches on the backend, then re-fetches this source
   const manualRefresh = useCallback(async () => {
     await fetch("/api/refresh");
     fetchData();

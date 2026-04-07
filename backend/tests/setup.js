@@ -4,4 +4,5 @@ module.exports = async function globalSetup() {
   process.env.YOUTUBE_API_KEY = "test-youtube-key-12345";
   process.env.PORT            = "3099";
   process.env.LOG_LEVEL       = "silent";
+  // HN, GitHub, Dev.to require no keys — just document for clarity
 };

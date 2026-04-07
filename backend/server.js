@@ -6,6 +6,9 @@ const rateLimit = require("express-rate-limit");
 const logger    = require("./src/logger");
 const cache     = require("./src/cacheManager");
 const ytService = require("./src/youtubeService");
+const hnService = require("./src/hackerNewsService");
+const ghService = require("./src/githubTrendingService");
+const dtService = require("./src/devtoService");
 
 const app = express();
 
@@ -42,25 +45,42 @@ app.use((req, _res, next) => {
 // ─── Helper ───────────────────────────────────────────────────────────────────
 const asyncRoute = (fn) => (req, res, next) => fn(req, res, next).catch(next);
 
+// ─── Cache key constants ──────────────────────────────────────────────────────
+const CACHE_KEYS = {
+  youtube:  "youtube_trending",
+  hn:       "hn_trending",
+  github:   "github_trending",
+  devto:    "devto_trending",
+};
+
 // ─── Routes ───────────────────────────────────────────────────────────────────
 
 app.get("/api/health", (req, res) => {
   const ytKey = process.env.YOUTUBE_API_KEY;
-  const configured = !!ytKey && ytKey !== "your_youtube_api_key_here";
+  const ytConfigured = !!ytKey && ytKey !== "your_youtube_api_key_here";
 
-  res.status(configured ? 200 : 503).json({
-    status: configured ? "ok" : "misconfigured",
-    version: "2.0.0",
+  res.status(ytConfigured ? 200 : 503).json({
+    status: ytConfigured ? "ok" : "misconfigured",
+    version: "3.0.0",
     timestamp: new Date().toISOString(),
-    config: { youtube: configured },
+    config: {
+      youtube: ytConfigured,
+      hackernews: true,   // no key required
+      github: true,       // no key required
+      devto: true,        // no key required
+    },
     cache: {
       keys: cache.keys(),
-      youtube: cache.getTtl("youtube_trending"),
+      youtube:  cache.getTtl(CACHE_KEYS.youtube),
+      hn:       cache.getTtl(CACHE_KEYS.hn),
+      github:   cache.getTtl(CACHE_KEYS.github),
+      devto:    cache.getTtl(CACHE_KEYS.devto),
     },
     uptime: Math.round(process.uptime()),
   });
 });
 
+// ── YouTube ───────────────────────────────────────────────────────────────────
 app.get("/api/youtube", asyncRoute(async (req, res) => {
   const apiKey = process.env.YOUTUBE_API_KEY;
 
@@ -71,68 +91,119 @@ app.get("/api/youtube", asyncRoute(async (req, res) => {
     });
   }
 
-  const { data: cached, isStale } = cache.get("youtube_trending");
+  const { data: cached, isStale } = cache.get(CACHE_KEYS.youtube);
   if (cached) {
     return res.json({
       data: cached,
-      cachedAt: cache.getTtl("youtube_trending"),
+      cachedAt: cache.getTtl(CACHE_KEYS.youtube),
       isStale,
       source: isStale ? "stale-cache" : "cache",
     });
   }
 
-  try {
-    const data = await ytService.fetchAllCategories(apiKey);
-    cache.set("youtube_trending", data);
-    return res.json({ data, source: "live", cachedAt: cache.getTtl("youtube_trending") });
-  } catch (err) {
-    logger.error("YouTube fetch failed", { message: err.message });
-    return res.status(502).json({
-      error: err.message,
-      suggestion: err.message.includes("403")
-        ? "Your YouTube API key may be invalid or quota exceeded."
-        : "YouTube API is temporarily unavailable. Try again shortly.",
+  const data = await ytService.fetchAllCategories(apiKey);
+  cache.set(CACHE_KEYS.youtube, data);
+
+  res.json({ data, cachedAt: null, isStale: false, source: "live" });
+}));
+
+// ── Hacker News ───────────────────────────────────────────────────────────────
+app.get("/api/hackernews", asyncRoute(async (req, res) => {
+  const { data: cached, isStale } = cache.get(CACHE_KEYS.hn);
+  if (cached) {
+    return res.json({
+      data: cached,
+      cachedAt: cache.getTtl(CACHE_KEYS.hn),
+      isStale,
+      source: isStale ? "stale-cache" : "cache",
     });
   }
+
+  const data = await hnService.fetchTopStories();
+  cache.set(CACHE_KEYS.hn, data);
+
+  res.json({ data, cachedAt: null, isStale: false, source: "live" });
 }));
 
-app.get("/api/refresh", refreshLimiter, asyncRoute(async (req, res) => {
-  cache.flush();
-  logger.info("Cache manually flushed via /api/refresh");
-  res.json({
-    message: "Cache cleared. Next request will fetch fresh data.",
-    timestamp: new Date().toISOString(),
-  });
+// ── GitHub Trending ───────────────────────────────────────────────────────────
+app.get("/api/github", asyncRoute(async (req, res) => {
+  const { data: cached, isStale } = cache.get(CACHE_KEYS.github);
+  if (cached) {
+    return res.json({
+      data: cached,
+      cachedAt: cache.getTtl(CACHE_KEYS.github),
+      isStale,
+      source: isStale ? "stale-cache" : "cache",
+    });
+  }
+
+  const data = await ghService.fetchTrending("daily");
+  cache.set(CACHE_KEYS.github, data);
+
+  res.json({ data, cachedAt: null, isStale: false, source: "live" });
 }));
 
+// ── Dev.to ────────────────────────────────────────────────────────────────────
+app.get("/api/devto", asyncRoute(async (req, res) => {
+  const { data: cached, isStale } = cache.get(CACHE_KEYS.devto);
+  if (cached) {
+    return res.json({
+      data: cached,
+      cachedAt: cache.getTtl(CACHE_KEYS.devto),
+      isStale,
+      source: isStale ? "stale-cache" : "cache",
+    });
+  }
+
+  const data = await dtService.fetchTopArticles();
+  cache.set(CACHE_KEYS.devto, data);
+
+  res.json({ data, cachedAt: null, isStale: false, source: "live" });
+}));
+
+// ── Refresh (clears all source caches) ───────────────────────────────────────
+app.get("/api/refresh", refreshLimiter, (req, res) => {
+  Object.values(CACHE_KEYS).forEach((key) => cache.del(key));
+  logger.info("Cache cleared for all sources");
+  res.json({ message: "Cache cleared for all sources", timestamp: new Date().toISOString() });
+});
+
+// ── Cache status ──────────────────────────────────────────────────────────────
 app.get("/api/cache-status", (req, res) => {
-  res.json({
-    youtube: cache.getTtl("youtube_trending") || { status: "not cached" },
-  });
+  const now = Date.now();
+  const status = {};
+
+  for (const [source, key] of Object.entries(CACHE_KEYS)) {
+    const ttlMs = cache.getTtl(key);
+    status[source] = ttlMs
+      ? { secondsLeft: Math.round((ttlMs - now) / 1000), cachedUntil: new Date(ttlMs).toISOString() }
+      : { secondsLeft: 0, cachedUntil: null };
+  }
+
+  res.json(status);
 });
 
 // ─── 404 handler ─────────────────────────────────────────────────────────────
 app.use((req, res) => {
-  res.status(404).json({ error: `Route ${req.method} ${req.path} not found` });
+  res.status(404).json({ error: `Route not found: ${req.method} ${req.path}` });
 });
 
 // ─── Global error handler ─────────────────────────────────────────────────────
-app.use((err, req, res, next) => { // eslint-disable-line no-unused-vars
-  logger.error("Unhandled error", { message: err.message, stack: err.stack });
-  res.status(err.status || 500).json({
-    error: process.env.NODE_ENV === "production"
-      ? "An internal server error occurred."
-      : err.message,
-  });
+app.use((err, req, res, _next) => {
+  const status = err.response?.status || 500;
+  const message = err.message || "Internal server error";
+  logger.error(`Unhandled error on ${req.path}`, { status, message });
+
+  if (status === 403 && message.includes("YouTube")) {
+    return res.status(502).json({ error: "YouTube API quota exceeded or key invalid." });
+  }
+
+  res.status(status >= 400 && status < 600 ? status : 500).json({ error: message });
 });
 
-// ─── Start ────────────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3001;
-if (require.main === module) {
-  app.listen(PORT, () => {
-    logger.info(`TrendPulse backend v2.0 running on port ${PORT}`);
-    logger.info(`YouTube configured: ${!!process.env.YOUTUBE_API_KEY}`);
-  });
+if (process.env.NODE_ENV !== "test") {
+  app.listen(PORT, () => logger.info(`TrendPulse backend listening on port ${PORT}`));
 }
 
 module.exports = app;

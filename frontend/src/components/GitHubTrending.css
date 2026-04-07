@@ -1,0 +1,102 @@
+.gh-section {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.gh-repo-list {
+  padding: 4px 0;
+}
+
+.gh-repo-card {
+  display: block;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--border);
+  text-decoration: none;
+  transition: background 0.15s;
+}
+.gh-repo-card:last-child { border-bottom: none; }
+.gh-repo-card:hover { background: var(--bg-card-hover); }
+.gh-repo-card.gh-skeleton { pointer-events: none; }
+
+.gh-repo-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+
+.gh-rank {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  min-width: 28px;
+  flex-shrink: 0;
+}
+
+.gh-repo-name {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gh-owner { color: var(--text-muted); }
+.gh-slash { color: var(--border-glow); margin: 0 1px; }
+.gh-name  { color: var(--accent-blue); }
+
+.gh-repo-card:hover .gh-name { color: #79c0ff; }
+
+.gh-description {
+  font-family: var(--font-display);
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin: 0 0 8px 38px;
+  line-height: 1.45;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.gh-stats {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-left: 38px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.gh-lang {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-secondary);
+}
+
+.gh-lang-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.gh-stat { color: var(--text-muted); }
+
+.gh-stars-today {
+  color: #3fb950;
+  font-weight: 700;
+  font-size: 11px;
+}
+
+@media (max-width: 640px) {
+  .gh-repo-card { padding: 12px 14px; }
+  .gh-description { margin-left: 28px; font-size: 11px; }
+  .gh-stats { margin-left: 28px; gap: 8px; }
+}

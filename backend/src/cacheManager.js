@@ -1,17 +1,22 @@
 const NodeCache = require("node-cache");
 const logger = require("./logger");
 
-const CACHE_TTL     = 1800; // 30 minutes (seconds)
-const STALE_TTL     = 3600; // 60 minutes — serve stale data if API is down
-const cache         = new NodeCache({ stdTTL: CACHE_TTL, useClones: false });
-const staleCache    = new NodeCache({ stdTTL: STALE_TTL, useClones: false });
+// Two-tier TTL: fresh data for 30 min, stale fallback for 60 min
+const FRESH_TTL  = 30 * 60;  // 30 minutes in seconds
+const STALE_TTL  = 60 * 60;  // 60 minutes in seconds
+
+// Primary cache: stores fresh data
+const freshCache = new NodeCache({ stdTTL: FRESH_TTL, checkperiod: 60 });
+
+// Stale cache: stores last-known data longer as a fallback
+const staleCache = new NodeCache({ stdTTL: STALE_TTL, checkperiod: 120 });
 
 /**
- * Gets data from cache. Returns { data, isStale }.
- * Tries fresh cache first, falls back to stale cache.
+ * Get data from cache.
+ * Returns { data, isStale } — data may come from fresh or stale cache.
  */
 function get(key) {
-  const fresh = cache.get(key);
+  const fresh = freshCache.get(key);
   if (fresh !== undefined) {
     return { data: fresh, isStale: false };
   }
@@ -26,45 +31,52 @@ function get(key) {
 }
 
 /**
- * Sets data in both fresh and stale caches.
+ * Set data in both fresh and stale caches.
  */
 function set(key, value) {
-  cache.set(key, value);
+  freshCache.set(key, value);
   staleCache.set(key, value);
-  logger.info(`Cache: stored data for key "${key}"`);
+  logger.debug(`Cache: stored "${key}"`);
 }
 
 /**
- * Returns TTL info for a key.
+ * Delete a key from both caches (used by /api/refresh).
  */
-function getTtl(key) {
-  const ttl = cache.getTtl(key);
-  if (!ttl) return null;
-  return {
-    expiresAt: new Date(ttl).toISOString(),
-    secondsLeft: Math.max(0, Math.round((ttl - Date.now()) / 1000)),
-  };
+function del(key) {
+  freshCache.del(key);
+  logger.debug(`Cache: deleted fresh "${key}"`);
 }
 
 /**
- * Flushes only the fresh cache (stale remains as fallback).
+ * Flush ALL keys from the fresh cache (keeps stale as fallback).
  */
 function flush() {
-  cache.flushAll();
+  freshCache.flushAll();
   logger.info("Cache: fresh cache flushed");
 }
 
 /**
- * Flushes everything including stale.
+ * Flush ALL keys from BOTH caches (hard reset).
  */
 function flushAll() {
-  cache.flushAll();
+  freshCache.flushAll();
   staleCache.flushAll();
   logger.info("Cache: all caches flushed");
 }
 
-function keys() {
-  return cache.keys();
+/**
+ * Get the TTL expiry timestamp (ms since epoch) for a key, or null if not cached.
+ */
+function getTtl(key) {
+  const ttl = freshCache.getTtl(key);
+  return ttl || null;
 }
 
-module.exports = { get, set, getTtl, flush, flushAll, keys };
+/**
+ * List all keys currently in the fresh cache.
+ */
+function keys() {
+  return freshCache.keys();
+}
+
+module.exports = { get, set, del, flush, flushAll, getTtl, keys };

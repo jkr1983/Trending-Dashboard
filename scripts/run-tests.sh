@@ -20,46 +20,40 @@ print_header() {
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 }
 
-print_header "📡 TrendPulse — Test Suite"
+print_header "📡 TrendPulse v3.0 — Test Suite"
 echo "Root: $ROOT_DIR"
-echo ""
 
-# ─── Backend Tests ────────────────────────────────────────────────────────────
-print_header "🟢 Backend Tests (Jest)"
+# ─── Backend Tests ─────────────────────────────────────────────────────────────
+print_header "🟢 Backend Tests (Jest + Supertest + Nock)"
 cd "$ROOT_DIR/backend"
-
 if [ ! -d node_modules ]; then
   echo "Installing backend dependencies..."
   npm install
 fi
-
 if [ -n "$COVERAGE" ]; then
   npm run test:coverage && PASS=$((PASS+1)) || FAIL=$((FAIL+1))
 else
   npm test && PASS=$((PASS+1)) || FAIL=$((FAIL+1))
 fi
 
-# ─── Frontend Tests ───────────────────────────────────────────────────────────
+# ─── Frontend Tests ────────────────────────────────────────────────────────────
 print_header "🔵 Frontend Tests (React Testing Library)"
 cd "$ROOT_DIR/frontend"
-
 if [ ! -d node_modules ]; then
   echo "Installing frontend dependencies..."
   npm install
 fi
-
 if [ -n "$COVERAGE" ]; then
   npm run test:coverage && PASS=$((PASS+1)) || FAIL=$((FAIL+1))
 else
   npm test && PASS=$((PASS+1)) || FAIL=$((FAIL+1))
 fi
 
-# ─── Summary ──────────────────────────────────────────────────────────────────
+# ─── Summary ───────────────────────────────────────────────────────────────────
 print_header "📊 Results"
 echo "  ✅ Passed suites: $PASS"
 echo "  ❌ Failed suites: $FAIL"
 echo ""
-
 if [ "$FAIL" -gt 0 ]; then
   echo "  ⚠️  Some tests failed. See output above."
   exit 1

@@ -15,11 +15,7 @@
 
 .header-left { display: flex; align-items: center; }
 
-.logo {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-}
+.logo { display: flex; align-items: center; gap: 14px; }
 
 .logo-icon {
   width: 44px;
@@ -42,9 +38,7 @@
   line-height: 1;
 }
 
-.logo-accent {
-  color: var(--accent-blue);
-}
+.logo-accent { color: var(--accent-blue); }
 
 .logo-sub {
   font-family: var(--font-mono);
@@ -54,23 +48,11 @@
   margin-top: 3px;
 }
 
-.header-right {
-  display: flex;
-  align-items: center;
-  gap: 20px;
-}
+.header-right { display: flex; align-items: center; gap: 20px; }
 
-.status-grid {
-  display: flex;
-  gap: 20px;
-  flex-wrap: wrap;
-}
+.status-grid { display: flex; gap: 20px; flex-wrap: wrap; }
 
-.status-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
+.status-item { display: flex; align-items: center; gap: 8px; }
 
 .status-dot {
   width: 8px;
@@ -78,11 +60,8 @@
   border-radius: 50%;
   flex-shrink: 0;
 }
-.status-dot.active { background: var(--accent-green); }
-.status-dot.pulse {
-  background: var(--accent-blue);
-  animation: pulse 2s ease infinite;
-}
+.status-dot.active  { background: var(--accent-green); }
+.status-dot.pulse   { background: var(--accent-blue); animation: pulse 2s ease infinite; }
 
 .status-label {
   font-family: var(--font-mono);
@@ -97,10 +76,7 @@
   color: var(--text-primary);
   font-weight: 700;
 }
-.status-value.countdown {
-  color: var(--accent-blue);
-  font-size: 13px;
-}
+.status-value.countdown { color: var(--accent-blue); font-size: 13px; }
 
 .refresh-btn {
   display: flex;
@@ -123,16 +99,11 @@
   border-color: var(--accent-blue);
   color: var(--accent-blue);
 }
-.refresh-btn.refreshing {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
-.refresh-btn svg.spin {
-  animation: spin 1s linear infinite;
-}
+.refresh-btn.refreshing { opacity: 0.6; cursor: not-allowed; }
+.refresh-btn svg.spin   { animation: spin 1s linear infinite; }
 
 @media (max-width: 640px) {
   .dashboard-header { padding: 16px; }
   .status-grid { display: none; }
-  .logo-title { font-size: 18px; }
+  .logo-title  { font-size: 18px; }
 }

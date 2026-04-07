@@ -3,6 +3,5 @@ WORKDIR /app
 COPY package.json .
 RUN npm install
 COPY . .
-# CI=true makes react-scripts test run once (no watch) and exit with correct code
 ENV CI=true
 CMD ["npm", "test"]

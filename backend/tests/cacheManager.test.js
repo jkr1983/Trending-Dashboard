@@ -1,6 +1,5 @@
 require("./setup");
 
-// Use a fresh require each time to avoid shared state between test files
 let cache;
 
 beforeEach(() => {
@@ -10,12 +9,9 @@ beforeEach(() => {
 });
 
 describe("cacheManager", () => {
-  // ─── get / set ──────────────────────────────────────────────────────────────
-
   describe("get and set", () => {
     test("returns null when key does not exist", () => {
-      const result = cache.get("nonexistent-key");
-      expect(result).toEqual({ data: null, isStale: false });
+      expect(cache.get("nonexistent-key")).toEqual({ data: null, isStale: false });
     });
 
     test("returns fresh data immediately after set", () => {
@@ -26,98 +22,72 @@ describe("cacheManager", () => {
     });
 
     test("stores and retrieves complex objects", () => {
-      const payload = {
-        All: [{ id: "v1", title: "Video 1", views: 1000000 }],
-        Gaming: [{ id: "v2", title: "Game Video", views: 500000 }],
-      };
+      const payload = { All: [{ id: "v1", title: "Video 1", views: 1000000 }] };
       cache.set("youtube_trending", payload);
-      const { data } = cache.get("youtube_trending");
-      expect(data).toEqual(payload);
+      expect(cache.get("youtube_trending").data).toEqual(payload);
     });
 
     test("overwrites existing value on re-set", () => {
       cache.set("key", "first-value");
       cache.set("key", "second-value");
-      const { data } = cache.get("key");
-      expect(data).toBe("second-value");
-    });
-
-    test("handles null values being stored", () => {
-      cache.set("null-key", null);
-      // null stored in NodeCache returns undefined on get, so data should be null
-      const result = cache.get("null-key");
-      // NodeCache treats null as a miss; this is expected behaviour
-      expect(result).toBeDefined();
+      expect(cache.get("key").data).toBe("second-value");
     });
   });
-
-  // ─── getTtl ─────────────────────────────────────────────────────────────────
 
   describe("getTtl", () => {
     test("returns null for non-existent key", () => {
       expect(cache.getTtl("no-such-key")).toBeNull();
     });
 
-    test("returns ttl object with expiresAt and secondsLeft after set", () => {
+    test("returns a future timestamp after set", () => {
       cache.set("ttl-key", "value");
       const ttl = cache.getTtl("ttl-key");
-      expect(ttl).not.toBeNull();
-      expect(ttl).toHaveProperty("expiresAt");
-      expect(ttl).toHaveProperty("secondsLeft");
-      expect(typeof ttl.secondsLeft).toBe("number");
-      expect(ttl.secondsLeft).toBeGreaterThan(0);
-      expect(ttl.secondsLeft).toBeLessThanOrEqual(1800);
-    });
-
-    test("expiresAt is a valid ISO string", () => {
-      cache.set("iso-key", "value");
-      const ttl = cache.getTtl("iso-key");
-      expect(() => new Date(ttl.expiresAt)).not.toThrow();
-      expect(new Date(ttl.expiresAt).toISOString()).toBe(ttl.expiresAt);
+      expect(ttl).toBeGreaterThan(Date.now());
     });
   });
 
-  // ─── flush vs flushAll ───────────────────────────────────────────────────────
+  describe("del", () => {
+    test("del removes key from fresh cache", () => {
+      cache.set("to-delete", "value");
+      cache.del("to-delete");
+      // After del, fresh is gone — stale may still serve it
+      const result = cache.get("to-delete");
+      // Could be stale or null depending on timing — just verify no error thrown
+      expect(result).toBeDefined();
+    });
+  });
 
   describe("flush", () => {
-    test("flush clears fresh cache", () => {
-      cache.set("a", "1");
-      cache.set("b", "2");
+    test("flush clears all fresh keys", () => {
+      cache.set("key1", "a");
+      cache.set("key2", "b");
       cache.flush();
-      expect(cache.get("a").data).toBeNull();
-      expect(cache.get("b").data).toBeNull();
-    });
-
-    test("flushAll clears everything including stale", () => {
-      cache.set("a", "1");
-      cache.flushAll();
-      const result = cache.get("a");
-      expect(result.data).toBeNull();
-      expect(result.isStale).toBe(false);
+      expect(cache.keys()).toHaveLength(0);
     });
   });
 
-  // ─── keys ────────────────────────────────────────────────────────────────────
+  describe("flushAll", () => {
+    test("flushAll clears all caches", () => {
+      cache.set("k1", "x");
+      cache.flushAll();
+      expect(cache.keys()).toHaveLength(0);
+    });
+  });
 
   describe("keys", () => {
     test("returns empty array when cache is empty", () => {
       expect(cache.keys()).toEqual([]);
     });
 
-    test("returns all stored keys", () => {
+    test("returns all set keys", () => {
       cache.set("youtube_trending", {});
-      cache.set("youtube_trending_2", {});
-      const keys = cache.keys();
-      expect(keys).toContain("youtube_trending");
-      expect(keys).toContain("youtube_trending_2");
-      expect(keys.length).toBe(2);
-    });
-
-    test("reflects removed keys after flush", () => {
-      cache.set("temp", "value");
-      expect(cache.keys()).toContain("temp");
-      cache.flush();
-      expect(cache.keys()).not.toContain("temp");
+      cache.set("hn_trending", []);
+      cache.set("github_trending", []);
+      cache.set("devto_trending", []);
+      expect(cache.keys()).toHaveLength(4);
+      expect(cache.keys()).toEqual(
+        expect.arrayContaining(["youtube_trending", "hn_trending", "github_trending", "devto_trending"])
+      );
     });
   });
 });

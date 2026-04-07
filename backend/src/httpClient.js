@@ -23,7 +23,6 @@ function createHttpClient(options = {}) {
       return delay;
     },
     retryCondition: (error) => {
-      // Retry on network errors or 5xx server errors — never on 4xx
       return (
         axiosRetry.isNetworkError(error) ||
         (error.response && error.response.status >= 500)

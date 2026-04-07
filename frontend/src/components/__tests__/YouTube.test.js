@@ -1,139 +1,163 @@
 import React from "react";
 import { render, screen, fireEvent } from "@testing-library/react";
 import "@testing-library/jest-dom";
-import YouTube from "../YouTube";
+import YouTube from "../../components/YouTube";
 
-const mockData = {
-  All: [
-    {
-      id: "v1",
-      title: "Amazing Trending Video",
-      channel: "Top Channel",
-      thumbnail: "https://img.youtube.com/vi/v1/hq.jpg",
-      views: 2000000,
-      likes: 50000,
-      publishedAt: new Date(Date.now() - 3600000).toISOString(),
-      url: "https://www.youtube.com/watch?v=v1",
-    },
-    {
-      id: "v2",
-      title: "Another Great Video",
-      channel: "Another Channel",
-      thumbnail: null,
-      views: 500000,
-      likes: 10000,
-      publishedAt: new Date(Date.now() - 7200000).toISOString(),
-      url: "https://www.youtube.com/watch?v=v2",
-    },
-  ],
-  Gaming: [
-    {
-      id: "g1",
-      title: "Best Gaming Video",
-      channel: "Game Channel",
-      thumbnail: "https://img.youtube.com/vi/g1/hq.jpg",
-      views: 1000000,
-      likes: 30000,
-      publishedAt: new Date(Date.now() - 86400000).toISOString(),
-      url: "https://www.youtube.com/watch?v=g1",
-    },
-  ],
-};
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
-describe("YouTube component", () => {
-  // ─── Loading state ──────────────────────────────────────────────────────────
-  describe("Loading state", () => {
-    test("renders skeleton cards when loading", () => {
-      const { container } = render(<YouTube data={null} loading={true} error={null} />);
-      const skeletons = container.querySelectorAll(".skeleton-card");
-      expect(skeletons.length).toBe(10);
-    });
+function makeVideo(overrides = {}) {
+  return {
+    id: "vid1",
+    title: "Test Trending Video",
+    channel: "Test Channel",
+    thumbnail: "https://img.youtube.com/vi/vid1/hq.jpg",
+    views: 1500000,
+    likes: 45000,
+    publishedAt: new Date(Date.now() - 3600000).toISOString(),
+    url: "https://www.youtube.com/watch?v=vid1",
+    ...overrides,
+  };
+}
 
-    test("does not render real video cards while loading", () => {
-      render(<YouTube data={null} loading={true} error={null} />);
-      expect(screen.queryByRole("link")).not.toBeInTheDocument();
-    });
+function makeData(overrides = {}) {
+  return {
+    All:                 [makeVideo({ id: "v1" }), makeVideo({ id: "v2" })],
+    Music:               [makeVideo({ id: "v3", title: "Music Video" })],
+    Gaming:              [makeVideo({ id: "v4", title: "Gaming Video" })],
+    "News & Politics":   [],
+    Entertainment:       [],
+    Sports:              [],
+    Comedy:              [],
+    "How-to & Style":    [],
+    "People & Blogs":    [],
+    "Pets & Animals":    [],
+    "Science & Technology": [],
+    ...overrides,
+  };
+}
+
+// ─── Loading state ────────────────────────────────────────────────────────────
+
+describe("YouTube — loading state", () => {
+  test("renders 15 skeleton cards while loading", () => {
+    render(<YouTube data={null} loading={true} error={null} />);
+    // Each skeleton card has a video-thumb-wrap skeleton div
+    const skeletons = document.querySelectorAll(".skeleton-card");
+    expect(skeletons.length).toBe(15);
   });
 
-  // ─── Error state ────────────────────────────────────────────────────────────
-  describe("Error state", () => {
-    test("renders error message when error is set", () => {
-      render(<YouTube data={null} loading={false} error="YouTube API quota exceeded" />);
-      expect(screen.getByRole("alert")).toBeInTheDocument();
-      expect(screen.getByText(/quota exceeded/i)).toBeInTheDocument();
-    });
-
-    test("does not show error box when error is null", () => {
-      render(<YouTube data={mockData} loading={false} error={null} />);
-      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-    });
+  test("does not show any video titles while loading", () => {
+    render(<YouTube data={null} loading={true} error={null} />);
+    expect(screen.queryByRole("link", { name: /Test Trending Video/ })).not.toBeInTheDocument();
   });
 
-  // ─── Data rendering ─────────────────────────────────────────────────────────
-  describe("Data rendering", () => {
-    test("renders category tabs from data keys", () => {
-      render(<YouTube data={mockData} loading={false} error={null} />);
-      expect(screen.getByRole("tab", { name: "All" })).toBeInTheDocument();
-      expect(screen.getByRole("tab", { name: "Gaming" })).toBeInTheDocument();
-    });
+  test("category tabs are disabled during loading", () => {
+    render(<YouTube data={null} loading={true} error={null} />);
+    const tabs = document.querySelectorAll(".cat-tab");
+    tabs.forEach((tab) => expect(tab).toBeDisabled());
+  });
+});
 
-    test("renders videos for the default (All) category", () => {
-      render(<YouTube data={mockData} loading={false} error={null} />);
-      expect(screen.getByText("Amazing Trending Video")).toBeInTheDocument();
-      expect(screen.getByText("Another Great Video")).toBeInTheDocument();
-    });
+// ─── Section header ───────────────────────────────────────────────────────────
 
-    test("renders video as a link to YouTube", () => {
-      render(<YouTube data={mockData} loading={false} error={null} />);
-      const links = screen.getAllByRole("link");
-      expect(links[0]).toHaveAttribute("href", "https://www.youtube.com/watch?v=v1");
-      expect(links[0]).toHaveAttribute("target", "_blank");
-    });
-
-    test("shows rank numbers for each video", () => {
-      render(<YouTube data={mockData} loading={false} error={null} />);
-      expect(screen.getByText("#1")).toBeInTheDocument();
-      expect(screen.getByText("#2")).toBeInTheDocument();
-    });
-
-    test("displays formatted view counts", () => {
-      render(<YouTube data={mockData} loading={false} error={null} />);
-      expect(screen.getByText(/2\.0M/)).toBeInTheDocument();
-    });
-
-    test("renders placeholder when thumbnail is null", () => {
-      const { container } = render(<YouTube data={mockData} loading={false} error={null} />);
-      const placeholders = container.querySelectorAll(".video-thumb-placeholder");
-      expect(placeholders.length).toBeGreaterThan(0);
-    });
-
-    test("shows empty state message when category has no videos", () => {
-      const emptyData = { All: [], Gaming: [] };
-      render(<YouTube data={emptyData} loading={false} error={null} />);
-      expect(screen.getByText(/no videos found/i)).toBeInTheDocument();
-    });
+describe("YouTube — section header", () => {
+  test("shows 'YouTube' heading", () => {
+    render(<YouTube data={makeData()} loading={false} error={null} />);
+    expect(screen.getByRole("heading", { name: /youtube/i })).toBeInTheDocument();
   });
 
-  // ─── Category switching ──────────────────────────────────────────────────────
-  describe("Category switching", () => {
-    test("switches content when a different category tab is clicked", () => {
-      render(<YouTube data={mockData} loading={false} error={null} />);
-      expect(screen.getByText("Amazing Trending Video")).toBeInTheDocument();
-      fireEvent.click(screen.getByRole("tab", { name: "Gaming" }));
-      expect(screen.getByText("Best Gaming Video")).toBeInTheDocument();
-      expect(screen.queryByText("Amazing Trending Video")).not.toBeInTheDocument();
-    });
+  test("shows 'Trending · Past 24h' badge", () => {
+    render(<YouTube data={makeData()} loading={false} error={null} />);
+    expect(screen.getByText(/Trending · Past 24h/i)).toBeInTheDocument();
+  });
 
-    test("active tab has aria-selected=true", () => {
-      render(<YouTube data={mockData} loading={false} error={null} />);
-      const allTab = screen.getByRole("tab", { name: "All" });
-      expect(allTab).toHaveAttribute("aria-selected", "true");
-    });
+  test("shows link to youtube.com/trending", () => {
+    render(<YouTube data={makeData()} loading={false} error={null} />);
+    const link = screen.getByRole("link", { name: /youtube\.com\/trending/i });
+    expect(link).toHaveAttribute("href", "https://www.youtube.com/feed/trending");
+  });
+});
 
-    test("inactive tab has aria-selected=false", () => {
-      render(<YouTube data={mockData} loading={false} error={null} />);
-      const gamingTab = screen.getByRole("tab", { name: "Gaming" });
-      expect(gamingTab).toHaveAttribute("aria-selected", "false");
-    });
+// ─── Error state ──────────────────────────────────────────────────────────────
+
+describe("YouTube — error state", () => {
+  test("shows error message when error is set", () => {
+    render(<YouTube data={null} loading={false} error="YouTube API key not configured" />);
+    expect(screen.getByText(/YouTube API key not configured/i)).toBeInTheDocument();
+  });
+
+  test("does not render video cards when error is set and no data", () => {
+    render(<YouTube data={null} loading={false} error="Something went wrong" />);
+    expect(document.querySelectorAll(".video-card").length).toBe(0);
+  });
+});
+
+// ─── Video rendering ──────────────────────────────────────────────────────────
+
+describe("YouTube — video rendering", () => {
+  test("renders video titles as links", () => {
+    render(<YouTube data={makeData()} loading={false} error={null} />);
+    const link = screen.getByRole("link", { name: /Test Trending Video/i });
+    expect(link).toHaveAttribute("href", "https://www.youtube.com/watch?v=v1");
+    expect(link).toHaveAttribute("target", "_blank");
+  });
+
+  test("renders rank numbers starting at #1", () => {
+    render(<YouTube data={makeData()} loading={false} error={null} />);
+    expect(screen.getByText("#1")).toBeInTheDocument();
+    expect(screen.getByText("#2")).toBeInTheDocument();
+  });
+
+  test("renders view and like counts", () => {
+    render(<YouTube data={makeData()} loading={false} error={null} />);
+    // formatNum(1500000) = "1.5M"
+    expect(screen.getAllByText(/1\.5M/i).length).toBeGreaterThan(0);
+  });
+
+  test("renders thumbnail images when URL is valid", () => {
+    render(<YouTube data={makeData()} loading={false} error={null} />);
+    const imgs = document.querySelectorAll(".video-thumb-wrap img");
+    expect(imgs.length).toBeGreaterThan(0);
+  });
+
+  test("shows placeholder when thumbnail URL is missing", () => {
+    const data = makeData({ All: [makeVideo({ thumbnail: null })] });
+    render(<YouTube data={data} loading={false} error={null} />);
+    expect(document.querySelector(".video-thumb-placeholder")).toBeInTheDocument();
+  });
+
+  test("shows empty state when category has no videos", () => {
+    render(<YouTube data={makeData()} loading={false} error={null} />);
+    // Switch to a category with no videos
+    fireEvent.click(screen.getByText("News & Politics"));
+    expect(screen.getByText(/No videos found/i)).toBeInTheDocument();
+  });
+});
+
+// ─── Category switching ───────────────────────────────────────────────────────
+
+describe("YouTube — category switching", () => {
+  test("renders a tab for each category in data", () => {
+    render(<YouTube data={makeData()} loading={false} error={null} />);
+    expect(screen.getByRole("button", { name: "All" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Music" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Gaming" })).toBeInTheDocument();
+  });
+
+  test("clicking a category tab switches displayed videos", () => {
+    render(<YouTube data={makeData()} loading={false} error={null} />);
+    expect(screen.getByText("Test Trending Video")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Music" }));
+    expect(screen.getByText("Music Video")).toBeInTheDocument();
+    expect(screen.queryByText("Test Trending Video")).not.toBeInTheDocument();
+  });
+
+  test("active tab has yt-active class", () => {
+    render(<YouTube data={makeData()} loading={false} error={null} />);
+    const allTab = screen.getByRole("button", { name: "All" });
+    expect(allTab.className).toMatch(/yt-active/);
+    fireEvent.click(screen.getByRole("button", { name: "Music" }));
+    expect(screen.getByRole("button", { name: "Music" }).className).toMatch(/yt-active/);
+    expect(screen.getByRole("button", { name: "All" }).className).not.toMatch(/yt-active/);
   });
 });
