@@ -30,19 +30,32 @@ A self-hosted, Dockerized dashboard that displays trending content from **YouTub
 
 ## ⚙️ Step 2 — Configure Environment
 
+`docker-compose.yml` reads `YOUTUBE_API_KEY` via variable substitution from a
+`.env` file in the **repo root** (same directory as `docker-compose.yml`).
+This is the one docker-compose picks up automatically — do not put it in
+`backend/.env`, that file is not read in the containerized flow.
+
 ```bash
 cd trending-dashboard
-cp backend/.env.example backend/.env
-nano backend/.env   # paste your YouTube API key
+cp backend/.env.example .env     # copies the template to the repo root
+nano .env                         # paste your YouTube API key
 ```
 
-Your `backend/.env` should look like:
+Your repo-root `.env` should look like:
 ```env
 YOUTUBE_API_KEY=AIzaSy...your_key_here...
 PORT=3001
 ```
 
-> ⚠️ **Never commit `.env` to Git.** It is already in `.gitignore`.
+> ⚠️ **Never commit `.env` to Git.** The repo's `.gitignore` excludes `.env`,
+> `.env.*`, and `backend/.env` — but always double-check `git status` before
+> staging, and use `git add <specific files>` instead of `git add .` when in
+> doubt.
+
+> 💡 **Running tests or the backend directly on the host** (outside Docker)?
+> Backend code still loads `backend/.env` via `dotenv` for that flow. The two
+> files can coexist — docker-compose uses the root `.env`, host `node` uses
+> `backend/.env`. The `YOUTUBE_API_KEY` value should be identical in both.
 
 ---
 
@@ -125,7 +138,7 @@ docker compose --profile test run --rm test
 | File | Tests |
 |------|------:|
 | `backend/tests/api.test.js` | 32 |
-| `backend/tests/youtubeService.test.js` | 23 |
+| `backend/tests/youtubeService.test.js` | 39 |
 | `backend/tests/hackerNewsService.test.js` | 17 |
 | `backend/tests/githubTrendingService.test.js` | 14 |
 | `backend/tests/devtoService.test.js` | 20 |
@@ -137,6 +150,43 @@ docker compose --profile test run --rm test
 | `frontend/src/components/__tests__/ErrorBoundary.test.js` | 5 |
 | `frontend/src/hooks/__tests__/useTrending.test.js` | 11 |
 | `frontend/src/utils/__tests__/formatters.test.js` | 20 |
+
+---
+
+## ▶️ YouTube Playability Filter
+
+Not every "public" video is actually playable. The YouTube Data API
+occasionally reports videos as `privacyStatus: public` and
+`uploadStatus: processed` even though the watch page itself returns
+`"Video unavailable"` — commonly on rights-gated sports broadcasts (ESPN,
+NFL, PGA). To keep broken links out of the dashboard, `youtubeService.js`
+runs an `isPlayable()` filter over every item returned by `videos.list`
+before normalising and sorting.
+
+Videos are dropped when **any** of the following is true:
+
+| Rule | Signal |
+|------|--------|
+| Not processed | `status.uploadStatus !== "processed"` (deleted/failed/rejected) |
+| Not public | `status.privacyStatus !== "public"` (private/unlisted) |
+| Region-blocked | `contentDetails.regionRestriction.blocked` contains `US` |
+| Region allow-list excludes US | `contentDetails.regionRestriction.allowed` set and excludes `US` |
+| Rights-gated / broken | `statistics.viewCount` **key is missing entirely** (empirically correlates with `playabilityStatus: ERROR` on the watch page) |
+
+The filter requires `status` and `contentDetails` to be in the
+`videos.list` `part` parameter — they are bundled into the
+`VIDEO_PARTS` constant in `backend/src/youtubeService.js`. If you're
+editing that file, **do not trim the parts list** without also updating
+`isPlayable()`, or the corresponding filter rule silently becomes a
+no-op.
+
+The check uses **key presence, not value**, for `viewCount` — a legit
+fresh upload with zero views still has the key present and passes
+through.
+
+Dropped counts are logged at `info` level with the category name, so
+you can grep `backend/logs/combined.log` for `dropped ... unplayable`
+to see the filter's activity after a refresh.
 
 ---
 
@@ -190,10 +240,13 @@ curl http://localhost:8080/api/refresh
 ## 🐛 Troubleshooting
 
 **"YouTube API key not configured"**
-→ Check `backend/.env` has `YOUTUBE_API_KEY=` set to your real key, then:
+→ Check the repo-root `.env` (same directory as `docker-compose.yml`) has
+`YOUTUBE_API_KEY=` set to your real key, then:
 ```bash
-docker compose restart backend
+docker compose up -d --build backend
 ```
+*(Use `--build` — a plain `restart` only reloads the container, not your
+code changes, and won't re-read env substitutions.)*
 
 **Dashboard shows stale data**
 → A source was temporarily unavailable; cached data is being served.

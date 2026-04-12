@@ -1,3 +1,57 @@
+# TrendPulse — Changelog
+
+## v3.1 — YouTube Playability Filter (2026-04-11)
+
+### Problem
+Videos occasionally appeared in the dashboard with broken watch links.
+Root cause: the YouTube Data API reports certain rights-gated broadcasts
+(ESPN, NFL, PGA) as `privacyStatus: public`, `uploadStatus: processed`,
+and `embeddable: true` with no region restriction — but the watch page
+itself returns `playabilityStatus: { status: "ERROR", reason: "Video
+unavailable" }`. The concrete trigger was an ESPN "Second Round" golf
+broadcast (id `kx7VwFiRPVk`).
+
+### Fix
+Added `isPlayable()` to `backend/src/youtubeService.js`, applied on both
+the primary `search → videos.list` path **and** the `mostPopular`
+fallback path. The filter excludes items that are:
+
+- missing `id` or `snippet` (malformed)
+- `status.uploadStatus !== "processed"` (deleted/failed/rejected)
+- `status.privacyStatus !== "public"` (private/unlisted)
+- missing the `statistics.viewCount` **key** (rights-gated broadcasts —
+  key-presence check, not value, so zero-view fresh uploads still pass)
+- US-region-blocked via `contentDetails.regionRestriction.blocked`
+- allow-listed to regions that exclude US via `.allowed`
+
+The `videos.list` `part` parameter was widened to
+`"snippet,statistics,status,contentDetails"` (exported as the
+`VIDEO_PARTS` constant) so the filter has the data it needs. Dropped
+counts are logged at `info` level with the category name.
+
+### Tests
+`backend/tests/youtubeService.test.js` grew from 23 → 39 tests:
+
+- 10 new `isPlayable()` unit tests covering every rejection and
+  acceptance case, including the key-presence nuance
+- 3 new `fetchAllCategories` integration tests for filter behaviour
+  on the primary path, fallback path, and the search/videos.list delta
+- 1 pre-existing sort test fixed (was using 3 IDs, silently fell
+  through to the mostPopular fallback which doesn't sort — bumped to
+  5 IDs so it actually exercises the sort code)
+- Default `makeYtItem` fixture now includes a playable
+  `status` + `contentDetails` block so existing tests stay green
+
+### Other fixes bundled in this release
+- `.gitignore` now excludes the repo-root `.env`, `.env.*`, and
+  `backend/logs/` — previously only `backend/.env` was ignored, which
+  meant a `git add .` could leak the real `YOUTUBE_API_KEY` sitting at
+  the repo root.
+- README env-config instructions now correctly point users to the
+  repo-root `.env` (docker-compose reads that, not `backend/.env`).
+
+---
+
 # TrendPulse v3.0 — What Changed
 
 ## New Sources

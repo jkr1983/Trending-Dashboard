@@ -3,10 +3,16 @@ const logger = require("./logger");
 
 const YT_BASE = "https://www.googleapis.com/youtube/v3";
 const MAX_RESULTS = 15; // expanded from 10
-const REGION = "US";
+const REGION = "US";    // used for both the search regionCode and the isPlayable region-restriction check
 
-// Parts requested from videos.list — status and contentDetails are required
-// so we can filter out unplayable videos (private, deleted, region-blocked, etc).
+// Parts requested from videos.list. EACH PART IS LOAD-BEARING for isPlayable():
+//   - snippet        → title, channel, thumbnails, description (for UI)
+//   - statistics     → viewCount presence check (rights-gated filter)
+//                      AND view/like counts (for UI + sort)
+//   - status         → uploadStatus + privacyStatus checks
+//   - contentDetails → regionRestriction.blocked / .allowed checks
+// Do NOT trim this list without also updating isPlayable() — dropping a part
+// will silently turn its associated filter rule into a no-op.
 const VIDEO_PARTS = "snippet,statistics,status,contentDetails";
 
 const YT_CATEGORIES = {
@@ -90,8 +96,10 @@ function isPlayable(item) {
 }
 
 /**
- * Normalises a raw YouTube video item into a clean object.
- * Handles missing/null fields gracefully.
+ * Normalises a raw YouTube video item into the shape consumed by the frontend.
+ * Handles missing/null fields gracefully as defence-in-depth — in the normal
+ * flow, items reach this function only after passing `isPlayable()`, so the
+ * statistics / snippet fields should already be present.
  */
 function normalizeVideo(item) {
   if (!item || !item.id || !item.snippet) return null;
@@ -117,12 +125,23 @@ function normalizeVideo(item) {
 /**
  * Fetches trending videos for a single category using a two-pass strategy:
  *
- * Pass 1 — search/list with publishedAfter to find videos from the past 24h,
- *           sorted by viewCount. Returns video IDs.
- * Pass 2 — videos.list to fetch full snippet + statistics for those IDs.
+ *   Pass 1 — search.list with `publishedAfter = now − 24h`, sorted by
+ *            viewCount. Returns video IDs only (cheap API cost).
+ *   Pass 2 — videos.list to fetch full `VIDEO_PARTS` for those IDs so we
+ *            can filter with `isPlayable()` and render full cards.
  *
- * Falls back to mostPopular chart (no date filter) if the search returns
- * fewer than 5 results (some niche categories have thin 24h coverage).
+ * Falls back to the `chart=mostPopular` path (no date filter) when search
+ * returns fewer than 5 IDs — some niche categories have thin 24h coverage
+ * and we'd rather show yesterday's popular videos than an empty section.
+ *
+ * The `isPlayable()` filter is applied on BOTH paths, before normalisation,
+ * so unplayable videos (private, deleted, region-blocked, rights-gated) are
+ * dropped in every code path. Dropped counts are logged at info level so
+ * you can see filter activity in `backend/logs/`.
+ *
+ * Errors are swallowed and return `[]` so one bad category doesn't take
+ * down the whole dashboard — except 403 (quota/key) which re-throws because
+ * every category will hit the same wall.
  */
 async function fetchCategory(client, apiKey, catId, catName) {
   try {
@@ -135,7 +154,7 @@ async function fetchCategory(client, apiKey, catId, catName) {
       order: "viewCount",
       publishedAfter,
       maxResults: MAX_RESULTS,
-      regionCode: "US",
+      regionCode: REGION,
       relevanceLanguage: "en",
       key: apiKey,
     };
