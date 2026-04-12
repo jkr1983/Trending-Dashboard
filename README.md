@@ -2,6 +2,8 @@
 
 A self-hosted, Dockerized dashboard that displays trending content from **YouTube, Hacker News, GitHub Trending, and Dev.to** — auto-refreshing every 30 minutes. Accessible from any device on your network.
 
+**v3.3** — YouTube now has user-selectable time frame (1/2/3/5/10/20 days) and count (5/10/15/20/25/50) dropdowns above the category tabs. The backend fetches a widened super-set and the frontend filters client-side — zero quota impact per dropdown change. See [v3.3 in CHANGES_v3.md](CHANGES_v3.md) for details.
+
 **v3.0** — Added Hacker News, GitHub Trending, and Dev.to; YouTube upgraded to top 15 videos filtered to the past 24 hours.
 
 ---
@@ -138,18 +140,60 @@ docker compose --profile test run --rm test
 | File | Tests |
 |------|------:|
 | `backend/tests/api.test.js` | 32 |
-| `backend/tests/youtubeService.test.js` | 52 |
+| `backend/tests/youtubeService.test.js` | 54 |
 | `backend/tests/hackerNewsService.test.js` | 17 |
 | `backend/tests/githubTrendingService.test.js` | 14 |
 | `backend/tests/devtoService.test.js` | 20 |
 | `backend/tests/cacheManager.test.js` | 8 |
-| `frontend/src/components/__tests__/YouTube.test.js` | 17 |
+| `frontend/src/components/__tests__/YouTube.test.js` | 27 |
 | `frontend/src/components/__tests__/HackerNews.test.js` | 16 |
 | `frontend/src/components/__tests__/GitHubTrending.test.js` | 19 |
 | `frontend/src/components/__tests__/DevTo.test.js` | 21 |
 | `frontend/src/components/__tests__/ErrorBoundary.test.js` | 5 |
 | `frontend/src/hooks/__tests__/useTrending.test.js` | 11 |
 | `frontend/src/utils/__tests__/formatters.test.js` | 20 |
+
+---
+
+## ▶️ YouTube Filters (time frame + count)
+
+Above the category tabs, two dropdowns let you pick:
+
+| Dropdown | Options | Default |
+|---|---|---|
+| **Time frame** | 1, 2, 3, 5, 10, or 20 days | 1 day |
+| **Show** | 5, 10, 15, 20, 25, or 50 videos | 15 |
+
+Both filters run **client-side** against a cached super-set the backend
+fetched once (up to 50 videos per category across the last 21 days).
+Changing either dropdown is instant — no API call, no quota cost, no
+loading state. The "Trending · Past N days" badge updates to reflect
+your time-frame pick.
+
+If the selected time frame is narrower than what's available and a
+category has zero videos in that window, the tab shows "No videos
+found for this category." (Option A.) Widen the dropdown to see more.
+
+### How it fits with the backend
+
+- `MAX_RESULTS = 50` in `backend/src/youtubeService.js` — the widest
+  single-request set `search.list` and `videos.list` allow.
+- `MAX_AGE_MS = 21 days` — the backend's outer recency guardrail.
+  Anything older is dropped at the backend because no dropdown pick
+  could reach it anyway. The extra day over 20 absorbs YouTube's
+  fuzzy `publishedAfter` enforcement and the 30-min cache TTL.
+- `TIME_FRAME_OPTIONS` and `COUNT_OPTIONS` in
+  `frontend/src/components/YouTube.js` — edit these arrays to
+  change the dropdown choices. Anything you add must be ≤ the
+  backend constants above, or the pick will return empty.
+
+### Quota note
+
+Widening the fetch to 21 days + 50 results does **not** change the
+YouTube API quota cost. `search.list` is 100 units regardless of
+`publishedAfter` width or `maxResults` (capped at 50). `videos.list`
+is 1 unit per call regardless of how many IDs are in the `id=` list.
+So a refresh is still ~101 units × 11 categories = ~1,111 units.
 
 ---
 
@@ -172,32 +216,30 @@ Videos are dropped when **any** of the following is true:
 | Region-blocked | `contentDetails.regionRestriction.blocked` contains `US` |
 | Region allow-list excludes US | `contentDetails.regionRestriction.allowed` set and excludes `US` |
 | Rights-gated / broken | `statistics.viewCount` **key is missing entirely** (empirically correlates with `playabilityStatus: ERROR` on the watch page) |
-| Outside the recency window | `snippet.publishedAt` older than **26 hours** (see "Past-24h enforcement" below) |
+| Outside the outer recency guardrail | `snippet.publishedAt` older than **21 days** (`MAX_AGE_MS`) |
 
-### Past-24h enforcement (recency filter)
+### Recency guardrail (backend side)
 
-The "Trending · Past 24h" badge would be a lie if we trusted only the
-`publishedAfter` parameter on `search.list`, because:
+`isRecent(item, nowMs)` runs locally as a second-stage filter on every
+video returned by both the primary and fallback paths. Its job is to
+make sure the dashboard never receives videos older than the widest
+possible user selection (20 days, plus a 1-day slack = 21 days total).
+
+This matters because:
 
 1. **`search.list?publishedAfter` is fuzzy** — YouTube sometimes returns
    videos an hour or two past the boundary we asked for.
 2. **The `mostPopular` fallback chart has no date filter at all.** When
-   `search.list` returns fewer than 5 recent videos for a niche category
-   (Music, Pets & Animals, Science & Technology, etc.), we fall back to
-   the most-popular chart — which silently leaked week-old and
-   month-old videos until we added this filter.
+   `search.list` returns fewer than 5 results for a niche category, we
+   fall back to the most-popular chart — which would otherwise leak
+   month-old videos into the response.
 
-So `isRecent(item, nowMs)` runs locally as a second-stage filter on every
-video from both paths, with a **26-hour window** (24h promise + 2h slack
-to absorb API drift and the 30-minute cache TTL). Videos with missing or
-unparseable `publishedAt` are also dropped.
+The user's dropdown pick (1, 2, 3, 5, 10, or 20 days) is applied
+client-side on top of this guardrail. The backend's job is only to say
+"no content older than 21 days ever reaches the frontend."
 
-**Consequence:** when a niche category genuinely has no trending video
-in the last 26h, its tab will show "No videos found for this category."
-This is intentional — better to show an empty section than to show
-stale content under a "Past 24h" label. (This was chosen over the
-alternative of relabeling fallback tabs as "Popular" — too much
-frontend complexity for little gain.)
+Videos with missing or unparseable `publishedAt` are also dropped by
+`isRecent`.
 
 The filter requires `status` and `contentDetails` to be in the
 `videos.list` `part` parameter — they are bundled into the

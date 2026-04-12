@@ -2,18 +2,26 @@ const { createHttpClient } = require("./httpClient");
 const logger = require("./logger");
 
 const YT_BASE = "https://www.googleapis.com/youtube/v3";
-const MAX_RESULTS = 15; // expanded from 10
+// We fetch a wide super-set so the frontend can filter client-side to any
+// window the user picks from the dropdown (1/2/3/5/10/20 days) and any count
+// they pick (5/10/15/20/25/50) without triggering a new API call per change.
+// 50 is the max YouTube allows for both `search.list?maxResults` and
+// `videos.list?id=...` in one call, so this is the widest single-request set.
+const MAX_RESULTS = 50;
 const REGION = "US";    // used for both the search regionCode and the isPlayable region-restriction check
 
-// Recency window for the "Past 24h" promise. Set to 26h instead of a strict
-// 24h to absorb two real-world sources of drift:
-//   1. `search.list?publishedAfter` is fuzzy — YouTube sometimes returns
-//      videos an hour or two past the boundary we asked for.
-//   2. We cache responses for 30 min, so a video that was 23.8h old when
-//      we fetched will appear 24.3h old by the time the cache expires.
-// A hard 24h cutoff would drop legitimately-trending videos caught by both;
-// 26h is honest enough that the "Past 24h" badge isn't a lie.
-const MAX_AGE_MS = 26 * 60 * 60 * 1000;
+// Outer recency guardrail. The frontend time-frame dropdown maxes out at
+// 20 days; we fetch 21 days so the user's largest pick always has fresh data
+// even if YouTube's `publishedAfter` is fuzzy at the edge. Anything older
+// than this is dropped before reaching the frontend — it would be unreachable
+// via the UI anyway.
+//
+// Historical context: this was 26h in v3.2 when the UI promised a strict
+// "Past 24h" view. v3.3 introduced user-selectable windows, so the backend
+// guardrail moved out to 21 days and the frontend does the fine-grained
+// filter. The 1-day extra slack still absorbs YouTube `publishedAfter`
+// fuzziness and the 30-min cache TTL.
+const MAX_AGE_MS = 21 * 24 * 60 * 60 * 1000;
 
 // Parts requested from videos.list. EACH PART IS LOAD-BEARING for isPlayable():
 //   - snippet        → title, channel, thumbnails, description (for UI)
@@ -49,11 +57,14 @@ function validateApiKey(key) {
 }
 
 /**
- * Returns an ISO 8601 timestamp for 24 hours ago.
- * Used to filter videos published in the last day.
+ * Returns an ISO 8601 timestamp for the `publishedAfter` parameter on
+ * `search.list`. Matches `MAX_AGE_MS` so the search and the local recency
+ * filter use the same outer boundary.
+ *
+ * The frontend time-frame dropdown then picks any window ≤ this for display.
  */
-function get24HoursAgo() {
-  return new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+function getPublishedAfterCutoff() {
+  return new Date(Date.now() - MAX_AGE_MS).toISOString();
 }
 
 /**
@@ -107,13 +118,18 @@ function isPlayable(item) {
 
 /**
  * Returns true if a raw YouTube video item was published within the
- * `MAX_AGE_MS` window relative to `nowMs` (defaults to the current time).
+ * backend's outer recency guardrail (`MAX_AGE_MS`) relative to `nowMs`
+ * (defaults to the current time).
  *
- * This is the client-side enforcement of the "Past 24h" promise. It runs
- * in addition to the `search.list?publishedAfter` request parameter because
- * YouTube's date filter is fuzzy at the edges AND because the `mostPopular`
- * fallback chart has no date filter at all. Without this function, niche
- * categories silently show videos from days or weeks ago.
+ * This function is the backend's outer fence — it does NOT enforce the
+ * user's dropdown selection. The frontend applies a finer filter
+ * (1/2/3/5/10/20 days) on top of the backend's response. This function's
+ * job is only to make sure absolutely-stale content (week-old mostPopular
+ * fallback leaks, etc.) doesn't reach the frontend at all.
+ *
+ * Why it's not a trusted "publishedAfter" replacement on YouTube's side:
+ *  - `search.list?publishedAfter` is fuzzy at the boundary
+ *  - The `mostPopular` fallback chart has no date filter
  *
  * `nowMs` is injected for testability — production callers pass `Date.now()`.
  * Returns false for items with missing or unparseable `publishedAt`.
@@ -167,12 +183,13 @@ function normalizeVideo(item) {
  *
  * Two filters are applied on BOTH paths, in order, before normalisation:
  *   1. `isPlayable()` — drops private/deleted/region-blocked/rights-gated.
- *   2. `isRecent()`   — drops anything outside the `MAX_AGE_MS` window
- *                        (the "Past 24h" promise, with slack). Especially
- *                        important for the fallback path, which has no
- *                        date filter on the YouTube side and would
- *                        otherwise leak week-old videos into niche
- *                        categories.
+ *   2. `isRecent()`   — drops anything outside the `MAX_AGE_MS` outer
+ *                        guardrail (21 days). This is the BACKEND's fence;
+ *                        the frontend applies a finer user-selected filter
+ *                        (1/2/3/5/10/20 days) on top. Especially important
+ *                        for the fallback path, which has no date filter
+ *                        on the YouTube side and would otherwise leak
+ *                        month-old videos.
  *
  * Dropped counts are logged at info level for each filter so you can see
  * filter activity in `backend/logs/combined.log`.
@@ -183,7 +200,7 @@ function normalizeVideo(item) {
  */
 async function fetchCategory(client, apiKey, catId, catName) {
   try {
-    const publishedAfter = get24HoursAgo();
+    const publishedAfter = getPublishedAfterCutoff();
     // Single `now` anchor for every recency check in this call, so that
     // items fetched ~milliseconds apart aren't judged against different
     // cutoffs.
@@ -231,7 +248,7 @@ async function fetchCategory(client, apiKey, catId, catName) {
       }
       if (droppedStale > 0) {
         logger.info(
-          `YouTube: dropped ${droppedStale} out-of-window video(s) in "${catName}" (>26h old)`
+          `YouTube: dropped ${droppedStale} out-of-window video(s) in "${catName}" (>21d old)`
         );
       }
 
@@ -271,7 +288,7 @@ async function fetchCategory(client, apiKey, catId, catName) {
       }
       if (droppedStale > 0) {
         logger.info(
-          `YouTube: dropped ${droppedStale} out-of-window video(s) in "${catName}" fallback (>26h old)`
+          `YouTube: dropped ${droppedStale} out-of-window video(s) in "${catName}" fallback (>21d old)`
         );
       }
       videos = recent.map(normalizeVideo).filter(Boolean);

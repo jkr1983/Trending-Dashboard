@@ -1,5 +1,90 @@
 # TrendPulse — Changelog
 
+## v3.3 — User-selectable YouTube time frame + count (2026-04-11)
+
+### Summary
+Two new dropdowns above the category tabs let the user pick:
+
+- **Time frame** — 1 / 2 / 3 / 5 / 10 / 20 days (default 1)
+- **Show** — 5 / 10 / 15 / 20 / 25 / 50 videos (default 15)
+
+Both filters run client-side against a cached super-set fetched by the
+backend. Changing either dropdown is instant — zero YouTube API calls,
+zero quota cost per change, no loading state.
+
+### Architecture
+
+**Hybrid filter** — backend fetches widest set once, frontend slices:
+
+- Backend: `MAX_RESULTS` raised from 15 → **50** (YouTube's single-call
+  cap for both `search.list` and `videos.list`).
+- Backend: `MAX_AGE_MS` raised from 26h → **21 days** (outer guardrail,
+  = widest dropdown + 1 day of slack for `publishedAfter` fuzziness).
+- Backend: renamed `get24HoursAgo()` → `getPublishedAfterCutoff()` and
+  wired it to `MAX_AGE_MS` so the search and the local recency filter
+  share one source of truth.
+- Frontend: new `TIME_FRAME_OPTIONS` and `COUNT_OPTIONS` arrays in
+  `YouTube.js`. Two `<select>` elements in a new `.yt-filters` row
+  between `.section-header` and `.category-tabs`. Client-side filter
+  uses `useMemo` to recompute on dropdown change — (1) drop items
+  where `publishedAt` is null/unparseable/older than `days * 24h`,
+  (2) slice to `count`.
+- Frontend: badge updates dynamically (`"Trending · Past 1 day"`,
+  `"Trending · Past 10 days"`, etc.) based on the time-frame pick.
+
+### Quota impact — none
+`search.list` is 100 units regardless of `publishedAfter` width or
+`maxResults` (capped at 50). `videos.list` is 1 unit per call regardless
+of how many IDs you pass. So a refresh is still ~101 units × 11
+categories = ~1,111 units. The dropdowns themselves trigger **zero**
+API calls because they operate entirely on the cached super-set.
+
+### Tests
+Backend `youtubeService.test.js`: 52 → **54** (boundary tests updated
+for 21-day window, `MAX_RESULTS` test updated for 50, new "accepts 10
+days" and "accepts 20 days" cases for isRecent).
+
+Frontend `YouTube.test.js`: 17 → **27**. New `YouTube — filter
+dropdowns` describe block (10 tests):
+
+- default 1-day filter shows only 24h-recent videos
+- 2-day dropdown includes the 30h video
+- 3-day dropdown includes the 30h + 50h videos
+- 20-day dropdown caps at the count limit
+- count dropdown trims from 20 to 5
+- count=50 shows all eligible (<50) videos
+- dropdowns disabled during loading
+- videos with missing `publishedAt` are dropped
+- empty state when nothing matches the selected window
+- badge updates when time-frame changes
+
+Two pre-existing broken tests also fixed as drive-by cleanup — both
+relied on `getByText("Test Trending Video")` which silently failed when
+`makeData()` had two videos with that same default title, and a
+hardcoded `watch?v=vid1` URL in `makeVideo()` that didn't derive from
+the overridden `id`. `makeVideo` now computes `url` and `thumbnail`
+from `id`, and `makeData` gives the second All-category video a
+distinct title.
+
+### Live verification after deploy
+Every category now ships 30–50 videos spanning the full 21 days.
+Gaming: 50 videos, 41 within 24h. Music: 30 videos, 0 within 24h
+(empty if user picks 1 day, full if they pick 10+). Science & Tech
+oldest: 18.6 days (inside the 21-day guardrail).
+
+### How to tune
+Edit `TIME_FRAME_OPTIONS` or `COUNT_OPTIONS` in
+`frontend/src/components/YouTube.js`. Any added option must satisfy:
+
+- `option.days ≤ 21` (backend's `MAX_AGE_MS` in days)
+- `option.count ≤ 50` (backend's `MAX_RESULTS`)
+
+If you need to exceed either, raise `MAX_AGE_MS` / `MAX_RESULTS` in
+`backend/src/youtubeService.js` first. Both constants are exported so
+tests can assert on them.
+
+---
+
 ## v3.2 — YouTube Past-24h Enforcement (2026-04-11)
 
 ### Problem

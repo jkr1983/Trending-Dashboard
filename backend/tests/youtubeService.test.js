@@ -241,32 +241,40 @@ function itemPublishedHoursAgo(hours, overrides = {}) {
 }
 
 describe("isRecent", () => {
-  test("MAX_AGE_MS is 26 hours in ms", () => {
-    expect(MAX_AGE_MS).toBe(26 * 60 * 60 * 1000);
+  test("MAX_AGE_MS is 21 days in ms (backend outer guardrail for the user's time-frame dropdown)", () => {
+    expect(MAX_AGE_MS).toBe(21 * 24 * 60 * 60 * 1000);
   });
 
   test("accepts a video published 5h ago", () => {
     expect(isRecent(itemPublishedHoursAgo(5))).toBe(true);
   });
 
-  test("accepts a video published exactly within the window (25h ago)", () => {
+  test("accepts a video published 25h ago (inside the widest frontend dropdown option)", () => {
     expect(isRecent(itemPublishedHoursAgo(25))).toBe(true);
   });
 
-  test("accepts a video published at the 26h boundary", () => {
-    // At exactly 26h, (nowMs - ts) === MAX_AGE_MS → included by the `<=` check.
+  test("accepts a video published 10 days ago (inside the 10-day dropdown option)", () => {
+    expect(isRecent(itemPublishedHoursAgo(10 * 24))).toBe(true);
+  });
+
+  test("accepts a video published 20 days ago (largest dropdown option)", () => {
+    expect(isRecent(itemPublishedHoursAgo(20 * 24))).toBe(true);
+  });
+
+  test("accepts a video published at the 21-day boundary (MAX_AGE_MS)", () => {
+    // At exactly 21d, (nowMs - ts) === MAX_AGE_MS → included by the `<=` check.
     const pa = new Date(Date.now() - MAX_AGE_MS).toISOString();
     const item = makeYtItem();
     item.snippet.publishedAt = pa;
     expect(isRecent(item)).toBe(true);
   });
 
-  test("rejects a video published 27h ago", () => {
-    expect(isRecent(itemPublishedHoursAgo(27))).toBe(false);
+  test("rejects a video published 22 days ago (just past the outer guardrail)", () => {
+    expect(isRecent(itemPublishedHoursAgo(22 * 24))).toBe(false);
   });
 
-  test("rejects a video published 10 days ago", () => {
-    expect(isRecent(itemPublishedHoursAgo(240))).toBe(false);
+  test("rejects a video published 60 days ago", () => {
+    expect(isRecent(itemPublishedHoursAgo(60 * 24))).toBe(false);
   });
 
   test("rejects items with no publishedAt", () => {
@@ -294,12 +302,13 @@ describe("isRecent", () => {
     item.snippet.publishedAt = fixedPa;
 
     const ts = Date.parse(fixedPa);
-    // now = ts + 10h → recent
-    expect(isRecent(item, ts + 10 * 3600 * 1000)).toBe(true);
-    // now = ts + 27h → stale
-    expect(isRecent(item, ts + 27 * 3600 * 1000)).toBe(false);
-    // now = ts + 26h exactly → boundary accepted
-    expect(isRecent(item, ts + 26 * 3600 * 1000)).toBe(true);
+    const DAY = 24 * 3600 * 1000;
+    // now = ts + 10 days → recent
+    expect(isRecent(item, ts + 10 * DAY)).toBe(true);
+    // now = ts + 22 days → stale (past 21d guardrail)
+    expect(isRecent(item, ts + 22 * DAY)).toBe(false);
+    // now = ts + 21 days exactly → boundary accepted
+    expect(isRecent(item, ts + 21 * DAY)).toBe(true);
   });
 });
 
@@ -348,24 +357,26 @@ describe("fetchAllCategories — two-pass 24h fetch", () => {
     expect(result.All.length).toBe(2);
   });
 
-  test("returns up to MAX_RESULTS (15) videos per category", async () => {
-    const fifteenItems = Array.from({ length: 15 }, (_, i) =>
-      makeYtItem({ id: `vid${i}`, statistics: { viewCount: String((15 - i) * 100000), likeCount: "1000" } })
+  test("returns up to MAX_RESULTS (50) videos per category", async () => {
+    const fiftyItems = Array.from({ length: 50 }, (_, i) =>
+      makeYtItem({ id: `vid${i}`, statistics: { viewCount: String((50 - i) * 100000), likeCount: "1000" } })
     );
     nock(YT_BASE)
       .get("/youtube/v3/search").query(true)
       .times(CAT_COUNT)
-      .reply(200, makeSearchResponse(fifteenItems.map((v) => v.id)));
+      .reply(200, makeSearchResponse(fiftyItems.map((v) => v.id)));
     nock(YT_BASE)
       .get("/youtube/v3/videos").query(true)
       .times(CAT_COUNT)
-      .reply(200, makeVideosResponse(fifteenItems));
+      .reply(200, makeVideosResponse(fiftyItems));
 
     const result = await fetchAllCategories("valid-key");
-    // Each category should have ≤ 15 videos
+    // Each category should have ≤ 50 videos (YouTube's single-call maximum)
     Object.values(result).forEach((videos) => {
-      expect(videos.length).toBeLessThanOrEqual(15);
+      expect(videos.length).toBeLessThanOrEqual(50);
     });
+    // Sanity: All should have all 50 since they're all playable + recent
+    expect(result.All.length).toBe(50);
   });
 
   test("sorts results by viewCount descending after videos.list pass", async () => {
@@ -487,17 +498,20 @@ describe("fetchAllCategories — two-pass 24h fetch", () => {
     expect(ids).toEqual(["keep"]);
   });
 
-  test("drops out-of-window (>26h) videos on the primary path", async () => {
-    // Mix of recent and stale publishedAt values — only the recent ones
-    // should survive the isRecent filter.
-    const recent1 = makeYtItem({ id: "recent1", statistics: { viewCount: "5000", likeCount: "1" } });
-    recent1.snippet.publishedAt = new Date(Date.now() - 2 * 3600 * 1000).toISOString();
-    const recent2 = makeYtItem({ id: "recent2", statistics: { viewCount: "9000", likeCount: "1" } });
-    recent2.snippet.publishedAt = new Date(Date.now() - 20 * 3600 * 1000).toISOString();
+  test("drops out-of-window (>21d) videos on the primary path", async () => {
+    // The backend's outer guardrail is 21 days. Anything older than that is
+    // dropped before it reaches the frontend. (Finer-grained user filtering
+    // happens client-side.) Mix recent + stale to prove only the recent ones
+    // survive.
+    const DAY = 24 * 3600 * 1000;
+    const recent1 = makeYtItem({ id: "recent1", statistics: { viewCount: "5000",  likeCount: "1" } });
+    recent1.snippet.publishedAt = new Date(Date.now() - 2 * 3600 * 1000).toISOString();     // 2h
+    const recent2 = makeYtItem({ id: "recent2", statistics: { viewCount: "9000",  likeCount: "1" } });
+    recent2.snippet.publishedAt = new Date(Date.now() - 15 * DAY).toISOString();            // 15 days
     const stale1  = makeYtItem({ id: "stale1",  statistics: { viewCount: "100000", likeCount: "1" } });
-    stale1.snippet.publishedAt  = new Date(Date.now() - 48 * 3600 * 1000).toISOString();
+    stale1.snippet.publishedAt  = new Date(Date.now() - 30 * DAY).toISOString();            // 30 days
     const stale2  = makeYtItem({ id: "stale2",  statistics: { viewCount: "200000", likeCount: "1" } });
-    stale2.snippet.publishedAt  = new Date(Date.now() - 7 * 24 * 3600 * 1000).toISOString();
+    stale2.snippet.publishedAt  = new Date(Date.now() - 180 * DAY).toISOString();           // 6 months
     const missing = makeYtItem({ id: "missing" });
     delete missing.snippet.publishedAt;
 
@@ -513,19 +527,21 @@ describe("fetchAllCategories — two-pass 24h fetch", () => {
     const result = await fetchAllCategories("valid-key");
     const ids = result.All.map((v) => v.id);
     expect(ids.sort()).toEqual(["recent1", "recent2"]); // stale and missing dropped
-    // Sanity: every returned video is within the 26h window
+    // Sanity: every returned video is within the 21-day guardrail
     for (const v of result.All) {
       const age = Date.now() - Date.parse(v.publishedAt);
-      expect(age).toBeLessThanOrEqual(26 * 3600 * 1000);
+      expect(age).toBeLessThanOrEqual(21 * DAY);
     }
   });
 
   test("drops out-of-window videos on the mostPopular fallback path", async () => {
-    // Force fallback with <5 search IDs.
+    // Force fallback with <5 search IDs. Backend guardrail is 21 days now,
+    // so the stale fixture must be older than that.
+    const DAY = 24 * 3600 * 1000;
     const recent = makeYtItem({ id: "recentOne" });
-    recent.snippet.publishedAt = new Date(Date.now() - 3 * 3600 * 1000).toISOString();
+    recent.snippet.publishedAt = new Date(Date.now() - 3 * 3600 * 1000).toISOString();  // 3h
     const stale  = makeYtItem({ id: "staleOne" });
-    stale.snippet.publishedAt  = new Date(Date.now() - 72 * 3600 * 1000).toISOString();
+    stale.snippet.publishedAt  = new Date(Date.now() - 25 * DAY).toISOString();         // 25 days
 
     nock(YT_BASE)
       .get("/youtube/v3/search").query(true)
@@ -540,12 +556,14 @@ describe("fetchAllCategories — two-pass 24h fetch", () => {
     expect(result.All.map((v) => v.id)).toEqual(["recentOne"]);
   });
 
-  test("returns empty category when every video is out-of-window (option A: show empty)", async () => {
-    // All 5 items are 3+ days old → category should end up empty instead of
-    // falling back to old content. This is the "honest Past 24h" promise.
+  test("returns empty category when every video is past the 21-day guardrail", async () => {
+    // All items older than 21 days → backend returns empty. This protects
+    // the frontend from ever receiving content it couldn't even select
+    // via the widest dropdown (20 days).
+    const DAY = 24 * 3600 * 1000;
     const items = Array.from({ length: 5 }, (_, i) => {
       const it = makeYtItem({ id: `old${i}`, statistics: { viewCount: String(10000 + i), likeCount: "1" } });
-      it.snippet.publishedAt = new Date(Date.now() - (72 + i) * 3600 * 1000).toISOString();
+      it.snippet.publishedAt = new Date(Date.now() - (22 + i) * DAY).toISOString();
       return it;
     });
     nock(YT_BASE)
@@ -594,9 +612,11 @@ describe("fetchAllCategories — two-pass 24h fetch", () => {
     await fetchAllCategories("valid-key");
 
     expect(capturedQuery).toHaveProperty("publishedAfter");
-    // publishedAfter should be within the last ~25 hours
+    // publishedAfter should match MAX_AGE_MS (21 days), with a small slack
+    // for the test-execution time between reading Date.now() and asserting.
     const cutoff = new Date(capturedQuery.publishedAfter).getTime();
-    expect(Date.now() - cutoff).toBeLessThan(25 * 60 * 60 * 1000);
-    expect(Date.now() - cutoff).toBeGreaterThan(23 * 60 * 60 * 1000);
+    const age = Date.now() - cutoff;
+    expect(age).toBeGreaterThanOrEqual(21 * 24 * 60 * 60 * 1000 - 1000); // −1s slack
+    expect(age).toBeLessThan(21 * 24 * 60 * 60 * 1000 + 5000);           // +5s slack
   });
 });
