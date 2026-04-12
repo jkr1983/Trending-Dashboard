@@ -47,8 +47,15 @@ in Docker and is accessible from any device on your home network.
 
 **Stack:** Node.js + Express (backend) · React (frontend) · nginx (reverse proxy) · Docker Compose
 
-**Key features:** 30-min cache with stale fallback · retry logic · rate limiting ·
-security headers · structured logging · React error boundaries · 90+ tests
+**Key features as of v3.4:**
+- Four-page dashboard (YouTube · Hacker News · GitHub Trending · Dev.to)
+  connected by a clickable nav bar with hash-based routing
+- Per-page time-frame (1/2/3/5/10/20 days) + count (5/10/15/20/25/50) filters,
+  all running instantly client-side over widened backend super-sets
+- 30-min cache with stale fallback · retry with backoff · rate limiting
+- `isPlayable()` + `isRecent()` drop unplayable and out-of-window YouTube videos
+- 308 tests across 13 files (305 passing, 3 pre-existing failures documented
+  in project memory)
 
 ---
 
@@ -59,8 +66,12 @@ trending-dashboard/
 ├── docker-compose.yml
 ├── docker-compose.test.yml
 ├── .gitignore
+├── .env                              ← repo-root; docker-compose reads YOUTUBE_API_KEY here
 ├── README.md
+├── CHANGES_v3.md                     ← v3-series changelog (v3.0 → v3.4)
 ├── PROJECT_REFERENCE.md              ← this file
+├── workflows/                        ← ⚠ GitHub Actions expects .github/workflows/; file is dormant
+│   └── ci.yml
 ├── scripts/
 │   └── run-tests.sh
 ├── backend/
@@ -68,17 +79,24 @@ trending-dashboard/
 │   ├── package.json
 │   ├── Dockerfile
 │   ├── Dockerfile.test
-│   ├── .env.example
+│   ├── .env.example                  ← template; actual env lives at repo root
+│   ├── logs/                         ← gitignored; rotating winston logs
 │   ├── src/
 │   │   ├── logger.js
-│   │   ├── httpClient.js
-│   │   ├── cacheManager.js
-│   │   └── youtubeService.js
+│   │   ├── httpClient.js             ← axios + axios-retry wrapper
+│   │   ├── cacheManager.js           ← node-cache with fresh + stale TTL
+│   │   ├── youtubeService.js         ← v3.3: isPlayable, isRecent, MAX_AGE_MS=21d, MAX_RESULTS=50
+│   │   ├── hackerNewsService.js      ← v3.4: TOP_N=100
+│   │   ├── githubTrendingService.js  ← v3.4: fetchAllRanges() → {daily,weekly,monthly}
+│   │   └── devtoService.js           ← v3.4: TOP_DAYS=30, PER_PAGE=50
 │   └── tests/
 │       ├── setup.js
-│       ├── api.test.js
-│       ├── youtubeService.test.js
-│       └── cacheManager.test.js
+│       ├── api.test.js               (32 tests; 2 pre-existing failures)
+│       ├── youtubeService.test.js    (54 tests)
+│       ├── hackerNewsService.test.js (17 tests)
+│       ├── githubTrendingService.test.js (17 tests)
+│       ├── devtoService.test.js      (20 tests)
+│       └── cacheManager.test.js      (11 tests)
 └── frontend/
     ├── Dockerfile
     ├── Dockerfile.test
@@ -87,26 +105,39 @@ trending-dashboard/
     └── src/
         ├── index.js
         ├── index.css
-        ├── App.js
+        ├── App.js                    ← v3.4: hash routing, single-page renderer
         ├── App.css
         ├── utils/
         │   ├── formatters.js
+        │   ├── filterOptions.js      ← v3.4: shared TIME_FRAME_OPTIONS, COUNT_OPTIONS, applyTimeAndCountFilter
         │   └── __tests__/
-        │       └── formatters.test.js
+        │       └── formatters.test.js (33 tests)
         ├── hooks/
         │   ├── useTrending.js
         │   └── __tests__/
-        │       └── useTrending.test.js
+        │       └── useTrending.test.js (10 tests)
         └── components/
-            ├── Header.js
+            ├── Header.js             ← main header: logo · clock · refresh button
             ├── Header.css
-            ├── YouTube.js
+            ├── Nav.js                ← v3.4: nav pills under the main header
+            ├── Nav.css
+            ├── shared.css            ← section-header + .filter-row + skeleton rules
+            ├── YouTube.js            ← v3.3: dropdowns + 21-day super-set filter
             ├── YouTube.css
+            ├── HackerNews.js         ← v3.4: dropdowns + client-side time filter
+            ├── HackerNews.css
+            ├── GitHubTrending.js     ← v3.4: dropdowns + bucket picker (daily/weekly/monthly)
+            ├── GitHubTrending.css
+            ├── DevTo.js              ← v3.4: dropdowns + client-side time filter
+            ├── DevTo.css
             ├── ErrorBoundary.js
             ├── ErrorBoundary.css
             └── __tests__/
-                ├── YouTube.test.js
-                └── ErrorBoundary.test.js
+                ├── YouTube.test.js        (27 tests)
+                ├── HackerNews.test.js     (25 tests)
+                ├── GitHubTrending.test.js (28 tests)
+                ├── DevTo.test.js          (29 tests)
+                └── ErrorBoundary.test.js  (5 tests; 1 pre-existing failure)
 ```
 
 ---

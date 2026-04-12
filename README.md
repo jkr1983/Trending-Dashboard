@@ -150,23 +150,34 @@ cd frontend && npm install && npm test
 docker compose --profile test run --rm test
 ```
 
-### Test Coverage — 179 tests across 9 files
+### Test Coverage — 308 tests across 13 files (305 passing, 3 pre-existing failures)
+
+**Backend — 151 tests (149 passing, 2 pre-existing failures):**
 
 | File | Tests |
 |------|------:|
-| `backend/tests/api.test.js` | 33 |
+| `backend/tests/api.test.js` | 32 |
 | `backend/tests/youtubeService.test.js` | 54 |
 | `backend/tests/hackerNewsService.test.js` | 17 |
 | `backend/tests/githubTrendingService.test.js` | 17 |
 | `backend/tests/devtoService.test.js` | 20 |
-| `backend/tests/cacheManager.test.js` | 8 |
+| `backend/tests/cacheManager.test.js` | 11 |
+
+**Frontend — 157 tests (156 passing, 1 pre-existing failure):**
+
+| File | Tests |
+|------|------:|
 | `frontend/src/components/__tests__/YouTube.test.js` | 27 |
 | `frontend/src/components/__tests__/HackerNews.test.js` | 25 |
-| `frontend/src/components/__tests__/GitHubTrending.test.js` | 29 |
-| `frontend/src/components/__tests__/DevTo.test.js` | 32 |
+| `frontend/src/components/__tests__/GitHubTrending.test.js` | 28 |
+| `frontend/src/components/__tests__/DevTo.test.js` | 29 |
 | `frontend/src/components/__tests__/ErrorBoundary.test.js` | 5 |
-| `frontend/src/hooks/__tests__/useTrending.test.js` | 11 |
-| `frontend/src/utils/__tests__/formatters.test.js` | 20 |
+| `frontend/src/hooks/__tests__/useTrending.test.js` | 10 |
+| `frontend/src/utils/__tests__/formatters.test.js` | 33 |
+
+The 3 pre-existing failures (2 backend in `api.test.js`, 1 frontend in
+`ErrorBoundary.test.js`) predate any of this work and are documented in
+the agent's project memory — they are not regressions from v3.x.
 
 ---
 

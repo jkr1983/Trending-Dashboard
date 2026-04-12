@@ -36,7 +36,16 @@ function extractDomain(url) {
 }
 
 /**
- * Fetches top HN stories. No API key required.
+ * Fetches up to `TOP_N` (100) HN stories from the top-stories endpoint.
+ * Runs two passes: the first gets the ordered list of story IDs, the second
+ * fetches each item in parallel. Individual item fetch failures are logged
+ * and dropped (the story is just missing from the result); the top-level
+ * topstories endpoint failing throws, because without IDs we can't do
+ * anything useful.
+ *
+ * The frontend filters this super-set client-side by `story.time` so the
+ * user's time-frame dropdown works without any additional network calls.
+ * No API key required.
  */
 async function fetchTopStories() {
   const client = createHttpClient({ timeout: 12000, retries: 2 });

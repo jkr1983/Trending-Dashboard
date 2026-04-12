@@ -82,22 +82,26 @@ Rewritten from the v3.x three-column grid to a single-page renderer:
   for the single-column layout
 
 ### Tests
-Backend: 151 → **154** tests across the service suites and api.test.js
-(the new ones cover `fetchAllRanges` success / partial failure / total
-failure, plus shape assertions for the GitHub endpoint's new bucket
-response).
+Backend: 148 → **151** tests (149 passing, 2 pre-existing failures).
+The new ones are 3 `fetchAllRanges` tests in `githubTrendingService.test.js`
+covering success / partial failure via `Promise.allSettled` / total
+failure. The `api.test.js` GitHub mocks were rewritten to cover the new
+`{ daily, weekly, monthly }` bucket shape (one test replaced in place,
+net zero count change).
 
-Frontend: 79 → **113** tests across the four component suites:
+Frontend — four source component suites: 83 → **109** tests across
+YouTube / HackerNews / GitHubTrending / DevTo. Full frontend count is
+131 → **157** (the other three suites — ErrorBoundary, useTrending,
+formatters — were unchanged). 156 passing, 1 pre-existing failure.
 
 - `HackerNews.test.js`: 16 → 25 (added `filter dropdowns` describe block,
-  updated badge + rank assertions, updated empty-state to match the new
-  "No stories found" copy)
-- `GitHubTrending.test.js`: 19 → 29 (rewrote data fixtures for the new
+  updated badge + rank + empty-state assertions)
+- `GitHubTrending.test.js`: 19 → 28 (rewrote data fixtures for the new
   `{ daily, weekly, monthly }` shape, added `filter dropdowns` block
   covering bucket switching at every dropdown value)
-- `DevTo.test.js`: 21 → 32 (added `filter dropdowns` block, updated badge
+- `DevTo.test.js`: 21 → 29 (added `filter dropdowns` block, updated badge
   + rank + empty-state assertions)
-- `YouTube.test.js`: 27 unchanged (already v3.3 behavior; just verified
+- `YouTube.test.js`: 27 unchanged (already v3.3 behavior; verified
   the shared-constants refactor didn't break anything)
 
 One pre-existing broken frontend test remains:

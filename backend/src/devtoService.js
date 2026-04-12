@@ -37,7 +37,9 @@ function normalizeArticle(item, rank) {
 }
 
 /**
- * Fetches top Dev.to articles from the past day.
+ * Fetches the top Dev.to articles over the widest window we support
+ * (`TOP_DAYS = 30`, `per_page = PER_PAGE = 50`). The frontend filters this
+ * super-set client-side based on the user's time-frame dropdown.
  * No API key required for public endpoints.
  */
 async function fetchTopArticles() {
@@ -50,7 +52,7 @@ async function fetchTopArticles() {
     },
     headers: {
       "Accept": "application/vnd.forem.api-v1+json",
-      "User-Agent": "TrendPulse/2.0",
+      "User-Agent": "TrendPulse/3.4",
     },
   });
 

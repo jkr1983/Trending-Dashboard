@@ -79,7 +79,7 @@ async function fetchTrending(since = "daily") {
       "Accept": "text/html,application/xhtml+xml",
       "Accept-Language": "en-US,en;q=0.9",
       "User-Agent":
-        "Mozilla/5.0 (compatible; TrendPulse/2.0; +https://github.com/trendpulse)",
+        "Mozilla/5.0 (compatible; TrendPulse/3.4; +https://github.com/trendpulse)",
     },
   });
 
