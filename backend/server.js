@@ -137,7 +137,7 @@ app.get("/api/github", asyncRoute(async (req, res) => {
     });
   }
 
-  const data = await ghService.fetchTrending("daily");
+  const data = await ghService.fetchAllRanges();
   cache.set(CACHE_KEYS.github, data);
 
   res.json({ data, cachedAt: null, isStale: false, source: "live" });

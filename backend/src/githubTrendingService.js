@@ -66,8 +66,9 @@ function parseRepos(html) {
 }
 
 /**
- * Fetches GitHub trending repos for the given timeframe.
+ * Fetches GitHub trending repos for a single timeframe.
  * @param {"daily"|"weekly"|"monthly"} since
+ * @returns {Promise<Array>} parsed repo list (may be empty on error)
  */
 async function fetchTrending(since = "daily") {
   const client = createHttpClient({ timeout: 15000, retries: 2 });
@@ -87,4 +88,37 @@ async function fetchTrending(since = "daily") {
   return repos;
 }
 
-module.exports = { fetchTrending, parseRepos };
+/**
+ * Fetches all three GitHub trending ranges in parallel and returns them as a
+ * single object. This matches the v3.3 "fetch wide super-set, filter client-
+ * side" pattern used for YouTube — the frontend's time-frame dropdown picks
+ * which bucket to display without triggering any additional network calls.
+ *
+ * GitHub's trending HTML scrape does NOT include per-repo publish timestamps
+ * (the only date-ish signal is "N stars today"). That's why we can't run a
+ * single-list client-side date filter like we do for HN or Dev.to — instead
+ * we pre-fetch the three buckets GitHub itself offers.
+ *
+ * If a single bucket fails, the other two still succeed — failures return an
+ * empty array for that bucket so the frontend can fall back gracefully.
+ */
+async function fetchAllRanges() {
+  const ranges = ["daily", "weekly", "monthly"];
+  const results = await Promise.allSettled(ranges.map(fetchTrending));
+
+  const buckets = {};
+  results.forEach((r, i) => {
+    if (r.status === "fulfilled") {
+      buckets[ranges[i]] = r.value;
+    } else {
+      logger.error(`GitHub Trending: failed to fetch ${ranges[i]}`, {
+        message: r.reason?.message,
+      });
+      buckets[ranges[i]] = [];
+    }
+  });
+
+  return buckets;
+}
+
+module.exports = { fetchTrending, fetchAllRanges, parseRepos };

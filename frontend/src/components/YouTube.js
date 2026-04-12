@@ -1,24 +1,15 @@
 import React, { useMemo, useState } from "react";
 import { formatNum, timeAgo, isValidThumbnail } from "../utils/formatters";
+import {
+  TIME_FRAME_OPTIONS,
+  COUNT_OPTIONS,
+  DEFAULT_TIME_FRAME_DAYS,
+  DEFAULT_COUNT,
+  applyTimeAndCountFilter,
+  timeFrameLabel,
+} from "../utils/filterOptions";
 import "./shared.css";
 import "./YouTube.css";
-
-// ── User-adjustable filter options ────────────────────────────────────────────
-// These drive the two dropdowns above the category tabs. Keep them in sync
-// with the backend's MAX_AGE_MS (21 days) and MAX_RESULTS (50) — if either
-// list exceeds those constants, the backend won't have data to fill the pick.
-const TIME_FRAME_OPTIONS = [
-  { days: 1,  label: "Past 1 day"   },
-  { days: 2,  label: "Past 2 days"  },
-  { days: 3,  label: "Past 3 days"  },
-  { days: 5,  label: "Past 5 days"  },
-  { days: 10, label: "Past 10 days" },
-  { days: 20, label: "Past 20 days" },
-];
-const COUNT_OPTIONS = [5, 10, 15, 20, 25, 50];
-
-const DEFAULT_TIME_FRAME_DAYS = 1;
-const DEFAULT_COUNT           = 15;
 
 function VideoCard({ video, index }) {
   const [imgError, setImgError] = useState(false);
@@ -82,22 +73,15 @@ export default function YouTube({ data, loading, error }) {
   // The backend already sorts by viewCount desc and has dropped anything
   // unplayable or past the 21-day outer guardrail, so all we need here is
   // the age filter and the cap.
-  const videos = useMemo(() => {
-    if (!rawVideos.length) return rawVideos;
-    const cutoffMs = Date.now() - timeFrameDays * 24 * 60 * 60 * 1000;
-    return rawVideos
-      .filter((v) => {
-        if (!v.publishedAt) return false;
-        const ts = Date.parse(v.publishedAt);
-        return !Number.isNaN(ts) && ts >= cutoffMs;
-      })
-      .slice(0, count);
-  }, [rawVideos, timeFrameDays, count]);
+  const videos = useMemo(
+    () => applyTimeAndCountFilter(rawVideos, timeFrameDays, count, "publishedAt"),
+    [rawVideos, timeFrameDays, count]
+  );
 
-  const badgeLabel = useMemo(() => {
-    const opt = TIME_FRAME_OPTIONS.find((o) => o.days === timeFrameDays);
-    return `Trending · ${opt ? opt.label : `Past ${timeFrameDays} days`}`;
-  }, [timeFrameDays]);
+  const badgeLabel = useMemo(
+    () => `Trending · ${timeFrameLabel(timeFrameDays)}`,
+    [timeFrameDays]
+  );
 
   return (
     <section className="yt-section">
@@ -126,11 +110,11 @@ export default function YouTube({ data, loading, error }) {
       {/* Filter row — lets the user pick the time window and how many
           videos to show. Both are client-side; the backend ships a wide
           super-set (21 days, up to 50/category) and this slices through it. */}
-      <div className="yt-filters" role="group" aria-label="YouTube filters">
-        <label className="yt-filter">
-          <span className="yt-filter-label">Time frame</span>
+      <div className="filter-row" role="group" aria-label="YouTube filters">
+        <label className="filter-group">
+          <span className="filter-label">Time frame</span>
           <select
-            className="yt-select"
+            className="filter-select"
             value={timeFrameDays}
             onChange={(e) => setTimeFrameDays(Number(e.target.value))}
             disabled={loading}
@@ -141,10 +125,10 @@ export default function YouTube({ data, loading, error }) {
             ))}
           </select>
         </label>
-        <label className="yt-filter">
-          <span className="yt-filter-label">Show</span>
+        <label className="filter-group">
+          <span className="filter-label">Show</span>
           <select
-            className="yt-select"
+            className="filter-select"
             value={count}
             onChange={(e) => setCount(Number(e.target.value))}
             disabled={loading}

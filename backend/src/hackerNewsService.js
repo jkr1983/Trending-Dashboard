@@ -2,7 +2,11 @@ const { createHttpClient } = require("./httpClient");
 const logger = require("./logger");
 
 const HN_BASE = "https://hacker-news.firebaseio.com/v0";
-const TOP_N = 15;
+// Fetch a wide super-set so the frontend can filter client-side by time frame
+// (1/2/3/5/10/20 days) and count (5/10/15/20/25/50) without re-fetching. HN's
+// topstories endpoint returns ~500 story IDs but we cap at 100 — that's more
+// than enough to satisfy the widest dropdown pick and keeps item fetches fast.
+const TOP_N = 100;
 
 /**
  * Normalises a raw HN item into a clean object.

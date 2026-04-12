@@ -40,11 +40,12 @@ function mockYouTubeSuccess() {
 }
 
 function mockHNSuccess() {
-  nock(HN_BASE)
-    .get("/v0/topstories.json")
-    .reply(200, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
-  // Mock each item fetch
-  for (let i = 1; i <= 15; i++) {
+  // Backend's HN fetch now requests up to 100 stories (TOP_N = 100) so the
+  // frontend can filter client-side. Mock all 100 to keep the integration
+  // tests self-contained.
+  const ids = Array.from({ length: 100 }, (_, i) => i + 1);
+  nock(HN_BASE).get("/v0/topstories.json").reply(200, ids);
+  for (const i of ids) {
     nock(HN_BASE)
       .get(`/v0/item/${i}.json`)
       .reply(200, {
@@ -61,24 +62,34 @@ function mockHNSuccess() {
 }
 
 function mockGitHubSuccess() {
-  const html = `
+  // Backend now fetches daily / weekly / monthly in parallel via
+  // fetchAllRanges(). Mock each range separately — nock matches on the
+  // ?since= query param.
+  const makeHtml = (repoName) => `
     <article class="Box-row">
-      <h2><a href="/owner/repo-one">owner/repo-one</a></h2>
+      <h2><a href="/owner/${repoName}">owner/${repoName}</a></h2>
       <p class="color-fg-muted">A test repository description</p>
       <span itemprop="programmingLanguage">TypeScript</span>
-      <a href="/owner/repo-one/stargazers">1,234</a>
-      <a href="/owner/repo-one/forks">567</a>
+      <a href="/owner/${repoName}/stargazers">1,234</a>
+      <a href="/owner/${repoName}/forks">567</a>
       <span>89 stars today</span>
     </article>
   `;
   nock(GH_BASE)
-    .get("/trending")
-    .query(true)
-    .reply(200, html, { "Content-Type": "text/html" });
+    .get("/trending").query({ since: "daily" })
+    .reply(200, makeHtml("daily-repo"), { "Content-Type": "text/html" });
+  nock(GH_BASE)
+    .get("/trending").query({ since: "weekly" })
+    .reply(200, makeHtml("weekly-repo"), { "Content-Type": "text/html" });
+  nock(GH_BASE)
+    .get("/trending").query({ since: "monthly" })
+    .reply(200, makeHtml("monthly-repo"), { "Content-Type": "text/html" });
 }
 
 function mockDevToSuccess() {
-  const articles = Array.from({ length: 15 }, (_, i) => ({
+  // Backend now requests top=30&per_page=50 — mock 50 articles so the
+  // widened super-set assertion passes.
+  const articles = Array.from({ length: 50 }, (_, i) => ({
     id: i + 1,
     title: `Dev.to Article ${i + 1}`,
     url: `https://dev.to/user/article-${i + 1}`,
@@ -248,10 +259,11 @@ describe("GET /api/hackernews", () => {
     expect(story).toHaveProperty("domain");
   });
 
-  test("returns up to 15 stories", async () => {
+  test("returns up to 100 stories (widened super-set for client-side filtering)", async () => {
     mockHNSuccess();
     const res = await request(app).get("/api/hackernews");
-    expect(res.body.data.length).toBeLessThanOrEqual(15);
+    expect(res.body.data.length).toBeLessThanOrEqual(100);
+    expect(res.body.data.length).toBe(100);
   });
 
   test("serves from cache on second request", async () => {
@@ -282,11 +294,17 @@ describe("GET /api/github", () => {
   });
   afterEach(() => { nock.cleanAll(); cache.flushAll(); });
 
-  test("returns 200 with array of repos on success", async () => {
+  test("returns 200 with { daily, weekly, monthly } buckets on success", async () => {
     mockGitHubSuccess();
     const res = await request(app).get("/api/github");
     expect(res.status).toBe(200);
-    expect(Array.isArray(res.body.data)).toBe(true);
+    expect(res.body.data).toBeDefined();
+    expect(res.body.data).toHaveProperty("daily");
+    expect(res.body.data).toHaveProperty("weekly");
+    expect(res.body.data).toHaveProperty("monthly");
+    expect(Array.isArray(res.body.data.daily)).toBe(true);
+    expect(Array.isArray(res.body.data.weekly)).toBe(true);
+    expect(Array.isArray(res.body.data.monthly)).toBe(true);
     expect(res.body.source).toBe("live");
   });
 
@@ -298,10 +316,27 @@ describe("GET /api/github", () => {
     expect(res.body.source).toBe("cache");
   });
 
-  test("returns 500 when GitHub is unreachable", async () => {
-    nock(GH_BASE).get("/trending").query(true).replyWithError("Network error");
+  test("returns partial buckets when one range fails", async () => {
+    // Daily and weekly succeed, monthly fails → buckets = { daily: [...],
+    // weekly: [...], monthly: [] }. fetchAllRanges uses Promise.allSettled
+    // so this is considered a successful response, not a 500.
+    const html = `
+      <article class="Box-row">
+        <h2><a href="/owner/ok">owner/ok</a></h2>
+      </article>
+    `;
+    nock(GH_BASE).get("/trending").query({ since: "daily" })
+      .reply(200, html, { "Content-Type": "text/html" });
+    nock(GH_BASE).get("/trending").query({ since: "weekly" })
+      .reply(200, html, { "Content-Type": "text/html" });
+    nock(GH_BASE).get("/trending").query({ since: "monthly" })
+      .replyWithError("Network error");
+
     const res = await request(app).get("/api/github");
-    expect(res.status).toBe(500);
+    expect(res.status).toBe(200);
+    expect(res.body.data.daily.length).toBe(1);
+    expect(res.body.data.weekly.length).toBe(1);
+    expect(res.body.data.monthly).toEqual([]);
   });
 });
 
@@ -341,10 +376,11 @@ describe("GET /api/devto", () => {
     expect(article.author).toHaveProperty("name");
   });
 
-  test("returns up to 15 articles", async () => {
+  test("returns up to 50 articles (widened super-set for client-side filtering)", async () => {
     mockDevToSuccess();
     const res = await request(app).get("/api/devto");
-    expect(res.body.data.length).toBeLessThanOrEqual(15);
+    expect(res.body.data.length).toBeLessThanOrEqual(50);
+    expect(res.body.data.length).toBe(50);
   });
 
   test("serves from cache on second request", async () => {

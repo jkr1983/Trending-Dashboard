@@ -1,6 +1,6 @@
 require("./setup");
 const nock = require("nock");
-const { fetchTrending, parseRepos } = require("../src/githubTrendingService");
+const { fetchTrending, fetchAllRanges, parseRepos } = require("../src/githubTrendingService");
 
 const GH_BASE = "https://github.com";
 
@@ -175,5 +175,62 @@ describe("fetchTrending", () => {
 
     const repos = await fetchTrending("daily");
     expect(repos).toEqual([]);
+  });
+});
+
+// ─── fetchAllRanges ───────────────────────────────────────────────────────────
+
+describe("fetchAllRanges", () => {
+  afterEach(() => nock.cleanAll());
+
+  test("returns { daily, weekly, monthly } object with parsed repos in each bucket", async () => {
+    // Three distinct HTML responses, one per range. Order of ?since= is
+    // whatever fetchAllRanges uses internally — we match on the query.
+    nock(GH_BASE)
+      .get("/trending").query({ since: "daily" })
+      .reply(200, makePageHtml([makeRepoHtml({ owner: "daily-owner", repo: "daily-repo" })]),
+        { "Content-Type": "text/html" });
+    nock(GH_BASE)
+      .get("/trending").query({ since: "weekly" })
+      .reply(200, makePageHtml([makeRepoHtml({ owner: "weekly-owner", repo: "weekly-repo" })]),
+        { "Content-Type": "text/html" });
+    nock(GH_BASE)
+      .get("/trending").query({ since: "monthly" })
+      .reply(200, makePageHtml([makeRepoHtml({ owner: "monthly-owner", repo: "monthly-repo" })]),
+        { "Content-Type": "text/html" });
+
+    const buckets = await fetchAllRanges();
+    expect(Object.keys(buckets).sort()).toEqual(["daily", "monthly", "weekly"]);
+    expect(buckets.daily[0].owner).toBe("daily-owner");
+    expect(buckets.weekly[0].owner).toBe("weekly-owner");
+    expect(buckets.monthly[0].owner).toBe("monthly-owner");
+  });
+
+  test("returns empty array for a bucket that fails (partial success)", async () => {
+    nock(GH_BASE)
+      .get("/trending").query({ since: "daily" })
+      .reply(200, makePageHtml([makeRepoHtml({ owner: "ok", repo: "ok" })]),
+        { "Content-Type": "text/html" });
+    nock(GH_BASE)
+      .get("/trending").query({ since: "weekly" })
+      .reply(500, "server error");
+    nock(GH_BASE)
+      .get("/trending").query({ since: "monthly" })
+      .reply(200, makePageHtml([makeRepoHtml({ owner: "ok2", repo: "ok2" })]),
+        { "Content-Type": "text/html" });
+
+    const buckets = await fetchAllRanges();
+    expect(buckets.daily.length).toBe(1);
+    expect(buckets.weekly).toEqual([]);
+    expect(buckets.monthly.length).toBe(1);
+  });
+
+  test("returns all empty when every bucket fails", async () => {
+    nock(GH_BASE).get("/trending").query({ since: "daily" }).replyWithError("down");
+    nock(GH_BASE).get("/trending").query({ since: "weekly" }).replyWithError("down");
+    nock(GH_BASE).get("/trending").query({ since: "monthly" }).replyWithError("down");
+
+    const buckets = await fetchAllRanges();
+    expect(buckets).toEqual({ daily: [], weekly: [], monthly: [] });
   });
 });

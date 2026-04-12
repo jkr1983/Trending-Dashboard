@@ -1,21 +1,36 @@
 # TrendPulse — Complete Project Reference
 
-YouTube Trending Dashboard v3.3 (reference doc)
+YouTube Trending Dashboard v3.4 (reference doc)
 Self-hosted · Dockerized · Auto-refreshing · Full test suite
 
 > ⚠️ **Doc drift warning.** This file contains embedded code blocks that
-> are **historical snapshots**, not a live source mirror. The code blocks
-> in this reference were captured at different points in time and many
-> predate v3 (four-source dashboard), v3.1 (playability filter), v3.2
-> (recency filter), and v3.3 (user-selectable time-frame and count
-> dropdowns). Treat the files under `backend/src/`, `backend/tests/`,
-> `frontend/src/`, and `docker-compose.yml` as the canonical source of
-> truth and this document as a high-level map.
+> are **historical snapshots**, not a live source mirror. Many predate
+> v3 (four-source dashboard), v3.1 (playability filter), v3.2 (recency
+> filter), v3.3 (user-selectable dropdowns), and v3.4 (per-source pages
+> + nav bar + widened HN/GitHub/Dev.to fetches + shared filter utils).
+> Treat the files under `backend/src/`, `backend/tests/`, `frontend/src/`,
+> and `docker-compose.yml` as the canonical source of truth and this
+> document as a high-level map.
 >
-> Sections known to be current as of 2026-04-11 (v3.3):
+> **v3.4 files NOT in this reference** (read the live files instead):
 >
-> - [`backend/src/youtubeService.js`](#backendsrcyoutubeservicejs) — full v3.3 source including `isPlayable`, `isRecent`, `MAX_AGE_MS = 21 days`, `MAX_RESULTS = 50`, and the `VIDEO_PARTS` parts list
-> - [`frontend/src/components/YouTube.js`](#frontendsrccomponentsyoutubejs) — full v3.3 source with `TIME_FRAME_OPTIONS`, `COUNT_OPTIONS`, the two filter dropdowns, and the client-side age/count filter
+> - `backend/src/hackerNewsService.js` — `TOP_N = 100`
+> - `backend/src/devtoService.js` — `TOP_DAYS = 30`, `PER_PAGE = 50`
+> - `backend/src/githubTrendingService.js` — `fetchAllRanges()` returns `{ daily, weekly, monthly }`
+> - `backend/server.js` — `/api/github` now calls `fetchAllRanges()`
+> - `frontend/src/App.js` — hash routing, four dedicated pages, `Nav` import
+> - `frontend/src/components/Nav.js` + `Nav.css` — new nav component
+> - `frontend/src/components/HackerNews.js` — filter dropdowns + rank re-numbering
+> - `frontend/src/components/GitHubTrending.js` — filter dropdowns + bucket picker
+> - `frontend/src/components/DevTo.js` — filter dropdowns + rank re-numbering
+> - `frontend/src/utils/filterOptions.js` — shared constants (NEW)
+> - `frontend/src/components/shared.css` — `.filter-row` etc. (NEW rules)
+>
+> Sections in this doc that **are** still reasonably current (as of
+> 2026-04-11, v3.3):
+>
+> - [`backend/src/youtubeService.js`](#backendsrcyoutubeservicejs) — full v3.3 source (unchanged in v3.4)
+> - [`frontend/src/components/YouTube.js`](#frontendsrccomponentsyoutubejs) — v3.3 source; v3.4 only refactored it to import from `utils/filterOptions.js`
 >
 > For prose descriptions of each change, see `README.md` and
 > `CHANGES_v3.md` — those are single-source-of-truth for feature docs
@@ -2586,5 +2601,5 @@ describe("formatCountdown", () => {
 
 ---
 
-*TrendPulse v3.3 — YouTube + Hacker News + GitHub Trending + Dev.to*  
+*TrendPulse v3.4 — four-page dashboard: YouTube + Hacker News + GitHub Trending + Dev.to*  
 *Node.js 20 · React 18 · Docker Compose · Full jest + RTL test suite*

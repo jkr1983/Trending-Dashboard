@@ -2,7 +2,9 @@
 
 A self-hosted, Dockerized dashboard that displays trending content from **YouTube, Hacker News, GitHub Trending, and Dev.to** — auto-refreshing every 30 minutes. Accessible from any device on your network.
 
-**v3.3** — YouTube now has user-selectable time frame (1/2/3/5/10/20 days) and count (5/10/15/20/25/50) dropdowns above the category tabs. The backend fetches a widened super-set and the frontend filters client-side — zero quota impact per dropdown change. See [v3.3 in CHANGES_v3.md](CHANGES_v3.md) for details.
+**v3.4** — Split the dashboard into four separate pages (YouTube, Hacker News, GitHub Trending, Dev.to) with a clickable nav bar directly under the main header. Each page has its own time-frame + count dropdowns, all using the same 1/2/3/5/10/20-day × 5/10/15/20/25/50 options for a consistent UX across sources. Hash-based routing (`#/youtube`, `#/hackernews`, etc.) survives refresh and back-button navigation. See [v3.4 in CHANGES_v3.md](CHANGES_v3.md) for details.
+
+**v3.3** — YouTube gained user-selectable time frame and count dropdowns above the category tabs. The backend fetches a widened super-set and the frontend filters client-side — zero quota impact per dropdown change.
 
 **v3.0** — Added Hacker News, GitHub Trending, and Dev.to; YouTube upgraded to top 15 videos filtered to the past 24 hours.
 
@@ -92,21 +94,32 @@ Then open `http://192.168.1.100:8080` on any phone, tablet, or computer.
 
 ## 📊 Dashboard Layout
 
+As of v3.4, each source has its own dedicated page. The dashboard opens on
+the YouTube page by default; click a nav pill to switch pages. Each page has
+its own Time frame + Show dropdowns that work independently — switching pages
+preserves your dropdown selections per page.
+
 ```
 ┌────────────────────────────────────────────────────────────┐
 │  Header — logo · last updated · countdown · Refresh Now    │
 ├────────────────────────────────────────────────────────────┤
-│  YouTube (full width)                                      │
-│  [Time frame ▾] [Show ▾]   ← user-selectable filters        │
-│  [All] [Music] [Gaming] [Entertainment] … category tabs    │
-│  Trending videos — window 1–20 days, count 5–50 (default   │
-│  1 day, 15 videos)                                          │
-├──────────────────┬─────────────────┬───────────────────────┤
-│  Hacker News     │  GitHub Trending│  Dev.to               │
-│  Top 15 stories  │  Today's repos  │  Top today            │
-└──────────────────┴─────────────────┴───────────────────────┘
-  3 columns ≥1100px · 2 columns ≥720px · 1 column on mobile
+│  [▶️ YouTube] [🔶 Hacker News] [🐙 GitHub] [📝 Dev.to]       │
+│   ← clickable nav pills — active page highlighted           │
+├────────────────────────────────────────────────────────────┤
+│  (active page — one of the four)                            │
+│                                                            │
+│  Section header (icon · name · badge · source link ↗)       │
+│  [Time frame ▾]  [Show ▾]    ← shared filter UX             │
+│  [Category tabs — YouTube only]                             │
+│                                                            │
+│  Filtered, ranked list of videos / stories / repos /        │
+│  articles. Defaults: Past 1 day × 15 items.                 │
+└────────────────────────────────────────────────────────────┘
 ```
+
+**Navigation.** The URL hash reflects the active page — `#/youtube`,
+`#/hackernews`, `#/github`, `#/devto`. Refreshing the page or using the
+browser's back/forward button restores the correct page.
 
 ---
 
@@ -141,16 +154,16 @@ docker compose --profile test run --rm test
 
 | File | Tests |
 |------|------:|
-| `backend/tests/api.test.js` | 32 |
+| `backend/tests/api.test.js` | 33 |
 | `backend/tests/youtubeService.test.js` | 54 |
 | `backend/tests/hackerNewsService.test.js` | 17 |
-| `backend/tests/githubTrendingService.test.js` | 14 |
+| `backend/tests/githubTrendingService.test.js` | 17 |
 | `backend/tests/devtoService.test.js` | 20 |
 | `backend/tests/cacheManager.test.js` | 8 |
 | `frontend/src/components/__tests__/YouTube.test.js` | 27 |
-| `frontend/src/components/__tests__/HackerNews.test.js` | 16 |
-| `frontend/src/components/__tests__/GitHubTrending.test.js` | 19 |
-| `frontend/src/components/__tests__/DevTo.test.js` | 21 |
+| `frontend/src/components/__tests__/HackerNews.test.js` | 25 |
+| `frontend/src/components/__tests__/GitHubTrending.test.js` | 29 |
+| `frontend/src/components/__tests__/DevTo.test.js` | 32 |
 | `frontend/src/components/__tests__/ErrorBoundary.test.js` | 5 |
 | `frontend/src/hooks/__tests__/useTrending.test.js` | 11 |
 | `frontend/src/utils/__tests__/formatters.test.js` | 20 |
@@ -196,6 +209,40 @@ YouTube API quota cost. `search.list` is 100 units regardless of
 `publishedAfter` width or `maxResults` (capped at 50). `videos.list`
 is 1 unit per call regardless of how many IDs are in the `id=` list.
 So a refresh is still ~101 units × 11 categories = ~1,111 units.
+
+---
+
+## 🔶🐙📝 Hacker News / GitHub / Dev.to Filters
+
+v3.4 extends the YouTube filter UX to every source page. Each page has the
+same two dropdowns — **Time frame** (1/2/3/5/10/20 days) and **Show**
+(5/10/15/20/25/50) — but the underlying filter strategy differs per source:
+
+| Source | Time-frame filter | Count | Super-set size |
+|---|---|---|---|
+| **YouTube** | client-side over `video.publishedAt` | client-side slice | up to 50/category, 21-day window |
+| **Hacker News** | client-side over `story.time` | client-side slice | top 100 stories (`TOP_N`) |
+| **GitHub Trending** | **picks between pre-fetched daily / weekly / monthly buckets** — GitHub's scrape has no per-repo timestamps, so `1d → daily`, `2d–3d → weekly`, `5d–20d → monthly` | client-side slice | all 3 buckets (~25 repos each) |
+| **Dev.to** | client-side over `article.publishedAt` | client-side slice | 50 articles over 30-day window (`top=30&per_page=50`) |
+
+Every dropdown change is instant — zero API calls. The backend fetches the
+widest possible super-set once per 30-minute cache cycle, and the frontend
+slices/filters that super-set based on the dropdown state.
+
+**GitHub's "lossy" mapping.** Because github.com/trending only exposes three
+time buckets (daily, weekly, monthly), picks of 5, 10, and 20 days all show
+the same monthly bucket. The badge makes this explicit: it reads
+`Trending · Monthly · Past N days` so the user can see which GitHub range
+they're actually looking at. This was chosen over hiding 10- and 20-day
+from the GitHub dropdown to keep the dropdown options identical across
+every source — consistency wins.
+
+**Backend caps** (edit these in tandem with `frontend/src/utils/filterOptions.js`):
+
+- `backend/src/hackerNewsService.js` — `TOP_N = 100`
+- `backend/src/devtoService.js` — `TOP_DAYS = 30`, `PER_PAGE = 50`
+- `backend/src/githubTrendingService.js` — fetches all 3 `?since=` variants via `fetchAllRanges()`
+- `backend/src/youtubeService.js` — `MAX_AGE_MS = 21 days`, `MAX_RESULTS = 50`
 
 ---
 

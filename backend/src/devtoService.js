@@ -2,7 +2,12 @@ const { createHttpClient } = require("./httpClient");
 const logger = require("./logger");
 
 const DEVTO_BASE = "https://dev.to/api";
-const TOP_N = 15;
+// Fetch a wide super-set so the frontend can filter client-side. Dev.to's
+// `top=N` parameter means "top articles from the past N days", so we pull
+// 30 days of window with up to 50 articles — enough to satisfy the widest
+// dropdown pick (20 days × 50 count) without any per-change API calls.
+const TOP_DAYS = 30;
+const PER_PAGE = 50;
 
 /**
  * Normalises a raw Dev.to article into a clean object.
@@ -40,8 +45,8 @@ async function fetchTopArticles() {
 
   const res = await client.get(`${DEVTO_BASE}/articles`, {
     params: {
-      top: 1,           // top articles from past N days (1 = past day)
-      per_page: TOP_N,
+      top: TOP_DAYS,      // widest window — 30 days of top articles
+      per_page: PER_PAGE, // up to 50 articles per response
     },
     headers: {
       "Accept": "application/vnd.forem.api-v1+json",

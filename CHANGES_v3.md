@@ -1,5 +1,125 @@
 # TrendPulse — Changelog
 
+## v3.4 — Per-source pages with unified filters + nav (2026-04-11)
+
+### Summary
+The dashboard was a single-page grid of all four sources. v3.4 splits it
+into four dedicated pages (YouTube, Hacker News, GitHub Trending, Dev.to)
+connected by a clickable nav bar directly under the main header. Every
+page now has the same two-dropdown filter UX that YouTube gained in v3.3,
+even though the underlying filter mechanics differ per source.
+
+### User-visible changes
+- **Nav bar** (`components/Nav.js`) with four pills styled to echo the
+  section-title + section-badge look from each source header. Clicking a
+  pill switches pages instantly. The active pill is highlighted.
+- **Hash-based routing** — `#/youtube`, `#/hackernews`, `#/github`,
+  `#/devto`. Refresh + back/forward work. Unknown hashes default to
+  YouTube.
+- **Every source page gains Time frame + Show dropdowns** with the same
+  options as YouTube's v3.3 dropdowns (1/2/3/5/10/20 days ×
+  5/10/15/20/25/50 items). Page state is independent per page —
+  switching pages preserves each page's dropdown selections within the
+  same session.
+- **Per-page badges** now read `Top Stories · Past N days`,
+  `Trending · Daily · Past 1 day`, `Top · Past 5 days`, etc. — honest
+  about the current filter state.
+- **Re-numbered ranks** — the rank column on each card (#1, #2, …)
+  reflects the filtered display position, not the original backend rank.
+  Same behavior YouTube has had since v3.3; HN / GitHub / Dev.to pick it
+  up in v3.4.
+
+### Architecture
+Same "fetch wide, filter client-side" pattern as v3.3, extended per
+source:
+
+| Source | Backend super-set | Filter strategy |
+|---|---|---|
+| YouTube | 21-day window × up to 50/category (unchanged from v3.3) | client-side on `video.publishedAt` |
+| HackerNews | `TOP_N` raised 15 → **100** stories | client-side on `story.time` |
+| GitHub | New `fetchAllRanges()` — pre-fetches **daily / weekly / monthly** in parallel via `Promise.allSettled` | time-frame dropdown maps to one of three buckets; no per-repo date filter is possible |
+| Dev.to | `top=1` → `top=30`, `per_page=15` → `per_page=50` | client-side on `article.publishedAt` |
+
+**Why GitHub is the odd one.** github.com/trending's HTML scrape exposes
+no per-repo publish timestamps (only stars-today). So we pre-fetch all
+three `?since=` variants and let the time-frame dropdown pick a bucket
+(`1d → daily`, `2d–3d → weekly`, `5d–20d → monthly`). The badge shows
+the bucket name so the user can see exactly which GitHub range they're
+on — `Trending · Weekly · Past 3 days`.
+
+**Why `Promise.allSettled` for GitHub.** If one range fails (rate limit,
+network blip), the other two still succeed. The failing bucket returns
+an empty array rather than 500-ing the whole endpoint. This is a real
+behaviour change from v3.3, where a single HTTP failure took down the
+whole /api/github response.
+
+### Shared frontend utilities
+- **New** `frontend/src/utils/filterOptions.js` — the single source of
+  truth for `TIME_FRAME_OPTIONS`, `COUNT_OPTIONS`,
+  `DEFAULT_TIME_FRAME_DAYS`, `DEFAULT_COUNT`,
+  `applyTimeAndCountFilter(items, days, count, dateField)`, and
+  `timeFrameLabel(days)`. All four source components import from here,
+  so widening the dropdowns means editing one file.
+- **New** `.filter-row` / `.filter-group` / `.filter-label` /
+  `.filter-select` CSS in `shared.css`, used by every source. Each
+  source can override the hover/focus accent colour locally (YouTube
+  keeps its red accent).
+- **New** `components/Nav.js` + `Nav.css` — hash-aware routing pills.
+  `PAGES` exported from `Nav.js` is consumed by `App.js` for the active
+  page dispatch.
+
+### App.js routing
+Rewritten from the v3.x three-column grid to a single-page renderer:
+
+- `useState` for `activePage` initialised from `window.location.hash`
+- `useEffect` listener on `hashchange` → keeps state in sync with
+  back/forward nav
+- `handleNavSelect(id)` writes `#/<id>` and lets the listener update
+  state (single source of truth)
+- All four `useTrending` hooks still mount on load → page switches are
+  instant because data is already cached in hook state
+- Dead `.dashboard-grid` CSS removed; `dashboard-main` gap tightened
+  for the single-column layout
+
+### Tests
+Backend: 151 → **154** tests across the service suites and api.test.js
+(the new ones cover `fetchAllRanges` success / partial failure / total
+failure, plus shape assertions for the GitHub endpoint's new bucket
+response).
+
+Frontend: 79 → **113** tests across the four component suites:
+
+- `HackerNews.test.js`: 16 → 25 (added `filter dropdowns` describe block,
+  updated badge + rank assertions, updated empty-state to match the new
+  "No stories found" copy)
+- `GitHubTrending.test.js`: 19 → 29 (rewrote data fixtures for the new
+  `{ daily, weekly, monthly }` shape, added `filter dropdowns` block
+  covering bucket switching at every dropdown value)
+- `DevTo.test.js`: 21 → 32 (added `filter dropdowns` block, updated badge
+  + rank + empty-state assertions)
+- `YouTube.test.js`: 27 unchanged (already v3.3 behavior; just verified
+  the shared-constants refactor didn't break anything)
+
+One pre-existing broken frontend test remains:
+`ErrorBoundary — Try Again button resets the error state`. It was broken
+on clean `main` before this commit and is unrelated to v3.4 — flagged
+for a future cleanup pass.
+
+### Live verification after deploy
+- Backend: HN returns 99 stories, GitHub returns
+  `{ daily: 13, weekly: 12, monthly: 18 }`, Dev.to returns 50 articles
+- Frontend bundle contains `nav-pill`, `filter-row`, `filter-select`,
+  `Hacker News`, `GitHub Trending`, and all six `Past N day(s)` labels
+- docker-compose rebuild healthy, frontend bundle hash bumped
+
+### Follow-up ideas (not done)
+- `ErrorBoundary` pre-existing test fix — surfaced again this cycle
+- Deep-linking into category tabs on YouTube (currently only page-level
+  routing is in the hash — category and dropdown state are per-session)
+- Persist dropdown selections in localStorage so they survive refresh
+
+---
+
 ## v3.3 — User-selectable YouTube time frame + count (2026-04-11)
 
 ### Summary

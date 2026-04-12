@@ -20,7 +20,7 @@ function makeHNItem(overrides = {}) {
   };
 }
 
-function mockHNSuccess(count = 15) {
+function mockHNSuccess(count = 100) {
   const ids = Array.from({ length: count }, (_, i) => i + 1);
   nock(HN_BASE).get("/v0/topstories.json").reply(200, ids);
   ids.forEach((id) => {
@@ -106,25 +106,28 @@ describe("normalizeStory", () => {
 describe("fetchTopStories", () => {
   afterEach(() => nock.cleanAll());
 
-  test("returns up to 15 stories", async () => {
-    mockHNSuccess(15);
+  test("returns up to 100 stories (TOP_N super-set for client-side filtering)", async () => {
+    mockHNSuccess(100);
     const stories = await fetchTopStories();
-    expect(stories.length).toBeLessThanOrEqual(15);
+    expect(stories.length).toBeLessThanOrEqual(100);
     expect(stories.length).toBeGreaterThan(0);
   });
 
-  test("fetches only the top 15 IDs even when more are available", async () => {
-    // Provide 30 IDs but only first 15 should be fetched
-    const ids = Array.from({ length: 30 }, (_, i) => i + 1);
+  test("caps at TOP_N even when topstories returns more IDs", async () => {
+    // Provide 200 IDs but only first 100 should be fetched
+    const ids = Array.from({ length: 200 }, (_, i) => i + 1);
     nock(HN_BASE).get("/v0/topstories.json").reply(200, ids);
-    // Only mock items 1–15; if 16–30 are fetched the test will fail
-    for (let i = 1; i <= 15; i++) {
+    // Only mock items 1–100; if 101–200 are fetched the test will fail
+    for (let i = 1; i <= 100; i++) {
       nock(HN_BASE)
         .get(`/v0/item/${i}.json`)
         .reply(200, makeHNItem({ id: i, title: `Story ${i}` }));
     }
     const stories = await fetchTopStories();
-    expect(stories.length).toBeLessThanOrEqual(15);
+    expect(stories.length).toBeLessThanOrEqual(100);
+    // If item 101 was fetched, nock would throw — if we got here with
+    // 100 stories, the cap is working
+    expect(stories.length).toBe(100);
   });
 
   test("story objects have correct shape", async () => {

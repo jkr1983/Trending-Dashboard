@@ -28,7 +28,7 @@ function makeArticle(overrides = {}) {
   };
 }
 
-function mockDevToSuccess(count = 15) {
+function mockDevToSuccess(count = 50) {
   const articles = Array.from({ length: count }, (_, i) =>
     makeArticle({ id: i + 1, title: `Article ${i + 1}` })
   );
@@ -134,14 +134,14 @@ describe("normalizeArticle", () => {
 describe("fetchTopArticles", () => {
   afterEach(() => nock.cleanAll());
 
-  test("returns up to 15 articles", async () => {
-    mockDevToSuccess(15);
+  test("returns up to 50 articles (widened super-set for client-side filtering)", async () => {
+    mockDevToSuccess(50);
     const articles = await fetchTopArticles();
-    expect(articles.length).toBeLessThanOrEqual(15);
+    expect(articles.length).toBeLessThanOrEqual(50);
     expect(articles.length).toBeGreaterThan(0);
   });
 
-  test("sends top=1 and per_page=15 params", async () => {
+  test("sends top=30 and per_page=50 params (widest pre-fetch)", async () => {
     let capturedQuery = null;
     nock(DT_BASE)
       .get("/api/articles")
@@ -149,8 +149,8 @@ describe("fetchTopArticles", () => {
       .reply(200, [makeArticle()]);
 
     await fetchTopArticles();
-    expect(capturedQuery.top).toBe("1");
-    expect(capturedQuery.per_page).toBe("15");
+    expect(capturedQuery.top).toBe("30");
+    expect(capturedQuery.per_page).toBe("50");
   });
 
   test("article objects have correct shape", async () => {
