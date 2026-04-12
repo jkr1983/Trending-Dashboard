@@ -172,14 +172,16 @@ function normalizeVideo(item) {
 /**
  * Fetches trending videos for a single category using a two-pass strategy:
  *
- *   Pass 1 — search.list with `publishedAfter = now − 24h`, sorted by
- *            viewCount. Returns video IDs only (cheap API cost).
+ *   Pass 1 — search.list with `publishedAfter = now − MAX_AGE_MS` (21 days),
+ *            sorted by viewCount. Returns video IDs only (cheap API cost).
  *   Pass 2 — videos.list to fetch full `VIDEO_PARTS` for those IDs so we
  *            can filter with `isPlayable()` and render full cards.
  *
  * Falls back to the `chart=mostPopular` path (no date filter) when search
- * returns fewer than 5 IDs — some niche categories have thin 24h coverage
- * and we'd rather show yesterday's popular videos than an empty section.
+ * returns fewer than 5 IDs — some niche categories have thin 21-day coverage
+ * and we'd rather show what's recently popular than an empty section. The
+ * fallback results are still run through `isRecent()` so week-or-older
+ * content doesn't sneak past the 21-day backend guardrail.
  *
  * Two filters are applied on BOTH paths, in order, before normalisation:
  *   1. `isPlayable()` — drops private/deleted/region-blocked/rights-gated.
@@ -261,7 +263,7 @@ async function fetchCategory(client, apiKey, catId, catName) {
     } else {
       // ── Fallback: mostPopular chart (no date filter) ────────────────────
       logger.warn(
-        `YouTube: insufficient 24h results for "${catName}" (${videoIds.length}), falling back to mostPopular`
+        `YouTube: insufficient recent results for "${catName}" (${videoIds.length}), falling back to mostPopular`
       );
       const fallbackParams = {
         part: VIDEO_PARTS,
@@ -277,7 +279,8 @@ async function fetchCategory(client, apiKey, catId, catName) {
       const playable = rawItems.filter(isPlayable);
       // The fallback chart (`mostPopular`) has no date filter on the YouTube
       // side, so we MUST apply the local recency cutoff here — otherwise
-      // niche categories leak week-old videos into the "Past 24h" list.
+      // niche categories leak month-old videos past the 21-day backend
+      // guardrail and into the user-selectable dropdown range.
       const recent   = playable.filter((it) => isRecent(it, nowMs));
       const droppedUnplayable = rawItems.length - playable.length;
       const droppedStale      = playable.length - recent.length;

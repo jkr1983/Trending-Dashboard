@@ -1,30 +1,34 @@
 # TrendPulse — Complete Project Reference
 
-YouTube Trending Dashboard v3.1 (reference doc)
+YouTube Trending Dashboard v3.3 (reference doc)
 Self-hosted · Dockerized · Auto-refreshing · Full test suite
 
 > ⚠️ **Doc drift warning.** This file contains embedded code blocks that
 > are **historical snapshots**, not a live source mirror. The code blocks
-> in this reference were captured at different points in time and some
-> predate v3 (four-source dashboard) and v3.1 (YouTube playability
-> filter). Treat the files under `backend/src/`, `backend/tests/`,
+> in this reference were captured at different points in time and many
+> predate v3 (four-source dashboard), v3.1 (playability filter), v3.2
+> (recency filter), and v3.3 (user-selectable time-frame and count
+> dropdowns). Treat the files under `backend/src/`, `backend/tests/`,
 > `frontend/src/`, and `docker-compose.yml` as the canonical source of
 > truth and this document as a high-level map.
 >
-> Sections known to be current as of 2026-04-11:
+> Sections known to be current as of 2026-04-11 (v3.3):
 >
-> - [`backend/src/youtubeService.js`](#backendsrcyoutubeservicejs) — refreshed with v3.1 playability filter
+> - [`backend/src/youtubeService.js`](#backendsrcyoutubeservicejs) — full v3.3 source including `isPlayable`, `isRecent`, `MAX_AGE_MS = 21 days`, `MAX_RESULTS = 50`, and the `VIDEO_PARTS` parts list
+> - [`frontend/src/components/YouTube.js`](#frontendsrccomponentsyoutubejs) — full v3.3 source with `TIME_FRAME_OPTIONS`, `COUNT_OPTIONS`, the two filter dropdowns, and the client-side age/count filter
 >
-> For a prose description of the v3.1 YouTube playability filter, see
-> `README.md` ("YouTube Playability Filter") and `CHANGES_v3.md`.
+> For prose descriptions of each change, see `README.md` and
+> `CHANGES_v3.md` — those are single-source-of-truth for feature docs
+> and are the files to read first. This reference doc is supplementary.
 
 ---
 
 ## Project Overview
 
-TrendPulse is a self-hosted dashboard that displays the top 10 trending YouTube videos
-across 11 categories, auto-refreshing every 30 minutes. It runs entirely in Docker and
-is accessible from any device on your home network.
+TrendPulse is a self-hosted dashboard that displays trending content from YouTube
+(user-selectable: 1–20 days × 5–50 videos, across 11 categories), Hacker News,
+GitHub Trending, and Dev.to — auto-refreshing every 30 minutes. It runs entirely
+in Docker and is accessible from any device on your home network.
 
 **Stack:** Node.js + Express (backend) · React (frontend) · nginx (reverse proxy) · Docker Compose
 
@@ -733,7 +737,7 @@ module.exports = { get, set, getTtl, flush, flushAll, keys };
 
 ## backend/src/youtubeService.js
 
-*Snapshot as of v3.1 (2026-04-11). See the live file in the repo for
+*Snapshot as of v3.3 (2026-04-11). See the live file in the repo for
 the canonical source. This block is kept in sync manually and may drift
 between releases — if you're auditing behaviour, read the real file.*
 
@@ -742,8 +746,26 @@ const { createHttpClient } = require("./httpClient");
 const logger = require("./logger");
 
 const YT_BASE = "https://www.googleapis.com/youtube/v3";
-const MAX_RESULTS = 15; // expanded from 10
+// We fetch a wide super-set so the frontend can filter client-side to any
+// window the user picks from the dropdown (1/2/3/5/10/20 days) and any count
+// they pick (5/10/15/20/25/50) without triggering a new API call per change.
+// 50 is the max YouTube allows for both `search.list?maxResults` and
+// `videos.list?id=...` in one call, so this is the widest single-request set.
+const MAX_RESULTS = 50;
 const REGION = "US";    // used for both the search regionCode and the isPlayable region-restriction check
+
+// Outer recency guardrail. The frontend time-frame dropdown maxes out at
+// 20 days; we fetch 21 days so the user's largest pick always has fresh data
+// even if YouTube's `publishedAfter` is fuzzy at the edge. Anything older
+// than this is dropped before reaching the frontend — it would be unreachable
+// via the UI anyway.
+//
+// Historical context: this was 26h in v3.2 when the UI promised a strict
+// "Past 24h" view. v3.3 introduced user-selectable windows, so the backend
+// guardrail moved out to 21 days and the frontend does the fine-grained
+// filter. The 1-day extra slack still absorbs YouTube `publishedAfter`
+// fuzziness and the 30-min cache TTL.
+const MAX_AGE_MS = 21 * 24 * 60 * 60 * 1000;
 
 // Parts requested from videos.list. EACH PART IS LOAD-BEARING for isPlayable():
 //   - snippet        → title, channel, thumbnails, description (for UI)
@@ -769,44 +791,22 @@ const YT_CATEGORIES = {
   "28": "Science & Technology",
 };
 
-/**
- * Validates that a YouTube API key is present and non-empty.
- */
 function validateApiKey(key) {
   if (!key || typeof key !== "string" || key.trim() === "") {
     throw new Error("YouTube API key is missing or invalid");
   }
 }
 
-/**
- * Returns an ISO 8601 timestamp for 24 hours ago.
- * Used to filter videos published in the last day.
- */
-function get24HoursAgo() {
-  return new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+// ISO 8601 cutoff for `search.list?publishedAfter`. Matches MAX_AGE_MS so the
+// search param and the local isRecent() filter use the same outer boundary.
+function getPublishedAfterCutoff() {
+  return new Date(Date.now() - MAX_AGE_MS).toISOString();
 }
 
-/**
- * Returns true if a raw YouTube video item is playable via its public watch URL.
- *
- * Excludes videos that:
- *   - Are missing id/snippet (malformed response)
- *   - Aren't fully processed (uploadStatus ≠ "processed" → deleted/failed/rejected)
- *   - Aren't public (privacyStatus ≠ "public" → private/unlisted)
- *   - Are region-blocked in our target region (US)
- *   - Have an allow-list that excludes our target region
- *   - Are missing `statistics.viewCount` — reliable signal the video is
- *     rights-gated or otherwise unavailable for playback even though the
- *     Data API reports it as public. Observed on ESPN / NFL-style broadcasts
- *     where videos.list returns `statistics: { favoriteCount: "0" }` (no
- *     viewCount key) and the watch page returns
- *     `playabilityStatus: { status: "ERROR", reason: "Video unavailable" }`.
- *     Note: genuinely fresh uploads with zero views still have the
- *     `viewCount` key present with value "0", so this check won't drop them.
- *
- * Videos returned by search.list but absent from videos.list are implicitly
- * filtered (deleted or made private between the two calls).
- */
+// Rejects videos that are unplayable via the public watch URL, even when the
+// Data API reports them as `public` + `processed`. See isPlayable() JSDoc in
+// the live file for the full list of rules — notably the rights-gated case
+// where `statistics.viewCount` is missing entirely (ESPN/NFL-style leaks).
 function isPlayable(item) {
   if (!item || !item.id || !item.snippet) return false;
 
@@ -814,9 +814,6 @@ function isPlayable(item) {
   if (status.uploadStatus && status.uploadStatus !== "processed") return false;
   if (status.privacyStatus && status.privacyStatus !== "public") return false;
 
-  // Missing viewCount key → rights-gated or unavailable for playback.
-  // We intentionally check key presence, not value, so a legit "0"-view
-  // fresh upload still passes.
   const stats = item.statistics;
   if (!stats || stats.viewCount === undefined || stats.viewCount === null) {
     return false;
@@ -831,16 +828,19 @@ function isPlayable(item) {
       return false;
     }
   }
-
   return true;
 }
 
-/**
- * Normalises a raw YouTube video item into the shape consumed by the frontend.
- * Handles missing/null fields gracefully as defence-in-depth — in the normal
- * flow, items reach this function only after passing `isPlayable()`, so the
- * statistics / snippet fields should already be present.
- */
+// BACKEND outer recency guardrail (21 days). The frontend applies a finer
+// user-selected filter on top. `nowMs` is injectable for testability.
+function isRecent(item, nowMs = Date.now()) {
+  const pa = item?.snippet?.publishedAt;
+  if (!pa) return false;
+  const ts = Date.parse(pa);
+  if (Number.isNaN(ts)) return false;
+  return (nowMs - ts) <= MAX_AGE_MS;
+}
+
 function normalizeVideo(item) {
   if (!item || !item.id || !item.snippet) return null;
   return {
@@ -862,32 +862,14 @@ function normalizeVideo(item) {
   };
 }
 
-/**
- * Fetches trending videos for a single category using a two-pass strategy:
- *
- *   Pass 1 — search.list with `publishedAfter = now − 24h`, sorted by
- *            viewCount. Returns video IDs only (cheap API cost).
- *   Pass 2 — videos.list to fetch full `VIDEO_PARTS` for those IDs so we
- *            can filter with `isPlayable()` and render full cards.
- *
- * Falls back to the `chart=mostPopular` path (no date filter) when search
- * returns fewer than 5 IDs — some niche categories have thin 24h coverage
- * and we'd rather show yesterday's popular videos than an empty section.
- *
- * The `isPlayable()` filter is applied on BOTH paths, before normalisation,
- * so unplayable videos (private, deleted, region-blocked, rights-gated) are
- * dropped in every code path. Dropped counts are logged at info level so
- * you can see filter activity in `backend/logs/`.
- *
- * Errors are swallowed and return `[]` so one bad category doesn't take
- * down the whole dashboard — except 403 (quota/key) which re-throws because
- * every category will hit the same wall.
- */
+// Two-pass fetch per category: search.list → videos.list. Falls back to
+// chart=mostPopular (no date filter) when search returns fewer than 5 IDs,
+// and runs isPlayable + isRecent on both paths before normalisation.
 async function fetchCategory(client, apiKey, catId, catName) {
   try {
-    const publishedAfter = get24HoursAgo();
+    const publishedAfter = getPublishedAfterCutoff();
+    const nowMs = Date.now();
 
-    // ── Pass 1: search for recent videos in this category ──────────────────
     const searchParams = {
       part: "id",
       type: "video",
@@ -908,35 +890,19 @@ async function fetchCategory(client, apiKey, catId, catName) {
     let videos = [];
 
     if (videoIds.length >= 5) {
-      // ── Pass 2: fetch full details for found IDs ────────────────────────
+      // Pass 2: details for the found IDs
       const detailRes = await client.get(`${YT_BASE}/videos`, {
-        params: {
-          part: VIDEO_PARTS,
-          id: videoIds.join(","),
-          key: apiKey,
-        },
+        params: { part: VIDEO_PARTS, id: videoIds.join(","), key: apiKey },
       });
-
       const rawItems = detailRes.data?.items || [];
       const playable = rawItems.filter(isPlayable);
-      const droppedCount = rawItems.length - playable.length;
-      if (droppedCount > 0) {
-        logger.info(
-          `YouTube: dropped ${droppedCount} unplayable video(s) in "${catName}"`
-        );
-      }
-
-      // Sort by viewCount descending (search order isn't guaranteed)
-      videos = playable
+      const recent   = playable.filter((it) => isRecent(it, nowMs));
+      videos = recent
         .map(normalizeVideo)
         .filter(Boolean)
         .sort((a, b) => b.views - a.views);
-
     } else {
-      // ── Fallback: mostPopular chart (no date filter) ────────────────────
-      logger.warn(
-        `YouTube: insufficient 24h results for "${catName}" (${videoIds.length}), falling back to mostPopular`
-      );
+      // Fallback: mostPopular chart
       const fallbackParams = {
         part: VIDEO_PARTS,
         chart: "mostPopular",
@@ -945,59 +911,46 @@ async function fetchCategory(client, apiKey, catId, catName) {
         key: apiKey,
       };
       if (catId !== "0") fallbackParams.videoCategoryId = catId;
-
       const fallbackRes = await client.get(`${YT_BASE}/videos`, { params: fallbackParams });
       const rawItems = fallbackRes.data?.items || [];
       const playable = rawItems.filter(isPlayable);
-      const droppedCount = rawItems.length - playable.length;
-      if (droppedCount > 0) {
-        logger.info(
-          `YouTube: dropped ${droppedCount} unplayable video(s) in "${catName}" fallback`
-        );
-      }
-      videos = playable.map(normalizeVideo).filter(Boolean);
+      const recent   = playable.filter((it) => isRecent(it, nowMs));
+      videos = recent.map(normalizeVideo).filter(Boolean);
     }
 
-    logger.info(`YouTube: fetched ${videos.length} videos for "${catName}"`);
     return videos;
-
   } catch (err) {
     const status = err.response?.status;
     const message = err.response?.data?.error?.message || err.message;
-
     if (status === 403) {
-      logger.error(`YouTube quota exceeded or key invalid for category "${catName}"`, { status, message });
       throw new Error(`YouTube API error (403): ${message}`);
     }
-
     logger.error(`YouTube fetch failed for category "${catName}"`, { status, message });
-    return []; // Graceful degradation — other categories still load
+    return [];
   }
 }
 
-/**
- * Fetches all trending video categories.
- * Throws only on fatal errors (bad key, quota); partial failures return empty arrays.
- */
 async function fetchAllCategories(apiKey) {
   validateApiKey(apiKey);
   const client = createHttpClient({ timeout: 15000, retries: 3 });
   const results = {};
-
-  // Run all category fetches in parallel
   const entries = Object.entries(YT_CATEGORIES);
   const fetched = await Promise.all(
     entries.map(([id, name]) => fetchCategory(client, apiKey, id, name))
   );
-
-  entries.forEach(([, name], i) => {
-    results[name] = fetched[i];
-  });
-
+  entries.forEach(([, name], i) => { results[name] = fetched[i]; });
   return results;
 }
 
-module.exports = { fetchAllCategories, normalizeVideo, isPlayable, validateApiKey, YT_CATEGORIES };
+module.exports = {
+  fetchAllCategories,
+  normalizeVideo,
+  isPlayable,
+  isRecent,
+  validateApiKey,
+  YT_CATEGORIES,
+  MAX_AGE_MS,
+};
 ```
 
 ---
@@ -2066,15 +2019,34 @@ export default function Header({ lastUpdated, nextRefresh, onRefresh, refreshing
 
 ## frontend/src/components/YouTube.js
 
+*Snapshot as of v3.3 (2026-04-11). See the live file for the canonical source.*
+
 ```javascript
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import { formatNum, timeAgo, isValidThumbnail } from "../utils/formatters";
+import "./shared.css";
 import "./YouTube.css";
+
+// ── User-adjustable filter options ────────────────────────────────────────────
+// These drive the two dropdowns above the category tabs. Keep them in sync
+// with the backend's MAX_AGE_MS (21 days) and MAX_RESULTS (50) — if either
+// list exceeds those constants, the backend won't have data to fill the pick.
+const TIME_FRAME_OPTIONS = [
+  { days: 1,  label: "Past 1 day"   },
+  { days: 2,  label: "Past 2 days"  },
+  { days: 3,  label: "Past 3 days"  },
+  { days: 5,  label: "Past 5 days"  },
+  { days: 10, label: "Past 10 days" },
+  { days: 20, label: "Past 20 days" },
+];
+const COUNT_OPTIONS = [5, 10, 15, 20, 25, 50];
+
+const DEFAULT_TIME_FRAME_DAYS = 1;
+const DEFAULT_COUNT           = 15;
 
 function VideoCard({ video, index }) {
   const [imgError, setImgError] = useState(false);
   const hasThumbnail = isValidThumbnail(video.thumbnail) && !imgError;
-
   return (
     <a href={video.url} target="_blank" rel="noreferrer" className="video-card">
       <div className="video-rank">#{index + 1}</div>
@@ -2099,71 +2071,109 @@ function VideoCard({ video, index }) {
   );
 }
 
-function SkeletonCard() {
-  return (
-    <div className="video-card skeleton-card">
-      <div className="skeleton" style={{ width: 28, height: 28, borderRadius: 4 }} />
-      <div className="skeleton video-thumb-wrap" />
-      <div className="video-info">
-        <div className="skeleton" style={{ height: 14, marginBottom: 8, width: "90%" }} />
-        <div className="skeleton" style={{ height: 12, width: "50%", marginBottom: 10 }} />
-        <div style={{ display: "flex", gap: 8 }}>
-          <div className="skeleton" style={{ height: 10, width: 60 }} />
-          <div className="skeleton" style={{ height: 10, width: 50 }} />
-        </div>
-      </div>
-    </div>
-  );
-}
+function SkeletonCard() { /* ... unchanged from v3 ... */ }
 
 export default function YouTube({ data, loading, error }) {
   const categories = data ? Object.keys(data) : [];
   const [activeCategory, setActiveCategory] = useState("All");
+  const [timeFrameDays,  setTimeFrameDays]  = useState(DEFAULT_TIME_FRAME_DAYS);
+  const [count,          setCount]          = useState(DEFAULT_COUNT);
 
   const displayCat = data
     ? (activeCategory in data ? activeCategory : categories[0])
     : "All";
-  const videos = data?.[displayCat] || [];
+  const rawVideos = data?.[displayCat] || [];
+
+  // Client-side filtering:
+  //   1. Drop anything older than the selected time frame (by publishedAt)
+  //   2. Slice the (sort-preserved) list to the selected count
+  // The backend already sorts by viewCount desc and has dropped anything
+  // unplayable or past the 21-day outer guardrail.
+  const videos = useMemo(() => {
+    if (!rawVideos.length) return rawVideos;
+    const cutoffMs = Date.now() - timeFrameDays * 24 * 60 * 60 * 1000;
+    return rawVideos
+      .filter((v) => {
+        if (!v.publishedAt) return false;
+        const ts = Date.parse(v.publishedAt);
+        return !Number.isNaN(ts) && ts >= cutoffMs;
+      })
+      .slice(0, count);
+  }, [rawVideos, timeFrameDays, count]);
+
+  const badgeLabel = useMemo(() => {
+    const opt = TIME_FRAME_OPTIONS.find((o) => o.days === timeFrameDays);
+    return `Trending · ${opt ? opt.label : `Past ${timeFrameDays} days`}`;
+  }, [timeFrameDays]);
 
   return (
-    <section className="platform-section yt-section">
-      <div className="platform-header">
-        <div className="platform-badge yt-badge">
-          <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18">
-            <path d="M23.5 6.2a3 3 0 0 0-2.1-2.1C19.5 3.5 12 3.5 12 3.5s-7.5 0-9.4.6A3 3 0 0 0 .5 6.2C0 8.1 0 12 0 12s0 3.9.5 5.8a3 3 0 0 0 2.1 2.1c1.9.6 9.4.6 9.4.6s7.5 0 9.4-.6a3 3 0 0 0 2.1-2.1C24 15.9 24 12 24 12s0-3.9-.5-5.8zM9.75 15.5V8.5l6.25 3.5-6.25 3.5z"/>
-          </svg>
-          YouTube
+    <section className="yt-section">
+      <div className="section-header">
+        <div className="section-title">
+          <span className="section-icon">▶️</span>
+          <h2>YouTube</h2>
+          <span className="section-badge">{badgeLabel}</span>
         </div>
-        <span className="platform-subtitle">Trending Videos</span>
+        <a href="https://www.youtube.com/feed/trending" target="_blank" rel="noreferrer" className="section-link">
+          youtube.com/trending ↗
+        </a>
       </div>
 
       {error && (
-        <div className="error-box" role="alert">
-          <span>⚠</span> {error}
-        </div>
+        <div className="section-error"><span>⚠</span> {error}</div>
       )}
 
-      <div className="category-tabs" role="tablist">
-        {loading
-          ? Array(6).fill(0).map((_, i) => (
-              <div key={i} className="skeleton" style={{ width: 80, height: 32, borderRadius: 20 }} />
-            ))
-          : categories.map((cat) => (
-              <button
-                key={cat}
-                role="tab"
-                aria-selected={displayCat === cat}
-                className={`cat-tab ${displayCat === cat ? "active yt-active" : ""}`}
-                onClick={() => setActiveCategory(cat)}
-              >
-                {cat}
-              </button>
+      {/* Filter row — instant client-side slicing over the cached super-set. */}
+      <div className="yt-filters" role="group" aria-label="YouTube filters">
+        <label className="yt-filter">
+          <span className="yt-filter-label">Time frame</span>
+          <select
+            className="yt-select"
+            value={timeFrameDays}
+            onChange={(e) => setTimeFrameDays(Number(e.target.value))}
+            disabled={loading}
+            aria-label="Time frame"
+          >
+            {TIME_FRAME_OPTIONS.map((opt) => (
+              <option key={opt.days} value={opt.days}>{opt.label}</option>
             ))}
+          </select>
+        </label>
+        <label className="yt-filter">
+          <span className="yt-filter-label">Show</span>
+          <select
+            className="yt-select"
+            value={count}
+            onChange={(e) => setCount(Number(e.target.value))}
+            disabled={loading}
+            aria-label="Number of videos"
+          >
+            {COUNT_OPTIONS.map((n) => (
+              <option key={n} value={n}>{n} videos</option>
+            ))}
+          </select>
+        </label>
+      </div>
+
+      <div className="category-tabs">
+        {(loading ? ["All", "Music", "Gaming", "Entertainment", "News & Politics",
+                     "Science & Technology", "Sports", "Comedy", "How-to & Style",
+                     "People & Blogs", "Pets & Animals"] : categories
+        ).map((cat) => (
+          <button
+            key={cat}
+            className={`cat-tab${displayCat === cat ? " active yt-active" : ""}`}
+            onClick={() => setActiveCategory(cat)}
+            disabled={loading}
+          >
+            {cat}
+          </button>
+        ))}
       </div>
 
       <div className="video-grid">
         {loading
-          ? Array(10).fill(0).map((_, i) => <SkeletonCard key={i} />)
+          ? Array.from({ length: Math.min(count, 15) }, (_, i) => <SkeletonCard key={i} />)
           : videos.length > 0
             ? videos.map((v, i) => <VideoCard key={v.id} video={v} index={i} />)
             : !error && (
@@ -2576,5 +2586,5 @@ describe("formatCountdown", () => {
 
 ---
 
-*TrendPulse v2.0 — YouTube Trending Dashboard*  
-*39 files · Node.js 20 · React 18 · Docker Compose*
+*TrendPulse v3.3 — YouTube + Hacker News + GitHub Trending + Dev.to*  
+*Node.js 20 · React 18 · Docker Compose · Full jest + RTL test suite*

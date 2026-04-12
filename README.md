@@ -97,8 +97,10 @@ Then open `http://192.168.1.100:8080` on any phone, tablet, or computer.
 │  Header — logo · last updated · countdown · Refresh Now    │
 ├────────────────────────────────────────────────────────────┤
 │  YouTube (full width)                                      │
+│  [Time frame ▾] [Show ▾]   ← user-selectable filters        │
 │  [All] [Music] [Gaming] [Entertainment] … category tabs    │
-│  Top 15 trending videos · past 24 hours                    │
+│  Trending videos — window 1–20 days, count 5–50 (default   │
+│  1 day, 15 videos)                                          │
 ├──────────────────┬─────────────────┬───────────────────────┤
 │  Hacker News     │  GitHub Trending│  Dev.to               │
 │  Top 15 stories  │  Today's repos  │  Top today            │
