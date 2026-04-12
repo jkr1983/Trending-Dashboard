@@ -1,6 +1,6 @@
 require("./setup");
 const nock = require("nock");
-const { fetchAllCategories, normalizeVideo, validateApiKey, YT_CATEGORIES } = require("../src/youtubeService");
+const { fetchAllCategories, normalizeVideo, isPlayable, validateApiKey, YT_CATEGORIES } = require("../src/youtubeService");
 
 const YT_BASE = "https://www.googleapis.com";
 
@@ -22,6 +22,14 @@ function makeYtItem(overrides = {}) {
     statistics: {
       viewCount: "1500000",
       likeCount: "45000",
+    },
+    status: {
+      uploadStatus:  "processed",
+      privacyStatus: "public",
+      embeddable:    true,
+    },
+    contentDetails: {
+      duration: "PT3M14S",
     },
     ...overrides,
   };
@@ -125,6 +133,96 @@ describe("normalizeVideo", () => {
   });
 });
 
+// ─── isPlayable ───────────────────────────────────────────────────────────────
+
+describe("isPlayable", () => {
+  test("accepts a normal public, processed video", () => {
+    expect(isPlayable(makeYtItem())).toBe(true);
+  });
+
+  test("rejects null / missing id / missing snippet", () => {
+    expect(isPlayable(null)).toBe(false);
+    const noId = makeYtItem(); delete noId.id;
+    expect(isPlayable(noId)).toBe(false);
+    const noSnippet = makeYtItem(); delete noSnippet.snippet;
+    expect(isPlayable(noSnippet)).toBe(false);
+  });
+
+  test("rejects videos with uploadStatus other than 'processed'", () => {
+    for (const bad of ["deleted", "failed", "rejected", "uploaded"]) {
+      const item = makeYtItem({ status: { uploadStatus: bad, privacyStatus: "public" } });
+      expect(isPlayable(item)).toBe(false);
+    }
+  });
+
+  test("rejects private videos", () => {
+    const item = makeYtItem({ status: { uploadStatus: "processed", privacyStatus: "private" } });
+    expect(isPlayable(item)).toBe(false);
+  });
+
+  test("rejects unlisted videos", () => {
+    const item = makeYtItem({ status: { uploadStatus: "processed", privacyStatus: "unlisted" } });
+    expect(isPlayable(item)).toBe(false);
+  });
+
+  test("rejects videos region-blocked in the US", () => {
+    const item = makeYtItem({
+      contentDetails: { duration: "PT1M", regionRestriction: { blocked: ["US", "CA"] } },
+    });
+    expect(isPlayable(item)).toBe(false);
+  });
+
+  test("accepts videos region-blocked outside the US", () => {
+    const item = makeYtItem({
+      contentDetails: { duration: "PT1M", regionRestriction: { blocked: ["DE", "FR"] } },
+    });
+    expect(isPlayable(item)).toBe(true);
+  });
+
+  test("rejects videos with an allow-list that excludes the US", () => {
+    const item = makeYtItem({
+      contentDetails: { duration: "PT1M", regionRestriction: { allowed: ["GB", "CA"] } },
+    });
+    expect(isPlayable(item)).toBe(false);
+  });
+
+  test("accepts videos with an allow-list that includes the US", () => {
+    const item = makeYtItem({
+      contentDetails: { duration: "PT1M", regionRestriction: { allowed: ["US", "CA"] } },
+    });
+    expect(isPlayable(item)).toBe(true);
+  });
+
+  test("accepts videos that don't provide status/contentDetails at all", () => {
+    const item = makeYtItem();
+    delete item.status;
+    delete item.contentDetails;
+    expect(isPlayable(item)).toBe(true);
+  });
+
+  test("rejects videos where statistics.viewCount key is missing (rights-gated)", () => {
+    // Real-world case: ESPN broadcast kx7VwFiRPVk returned
+    // `statistics: { favoriteCount: "0" }` with no viewCount key.
+    // Data API reports it public/processed, but watch page returns
+    // playabilityStatus ERROR "Video unavailable".
+    const item = makeYtItem({ statistics: { favoriteCount: "0" } });
+    expect(isPlayable(item)).toBe(false);
+  });
+
+  test("rejects videos with no statistics object at all", () => {
+    const item = makeYtItem();
+    delete item.statistics;
+    expect(isPlayable(item)).toBe(false);
+  });
+
+  test("accepts videos with viewCount = '0' (legitimately fresh upload)", () => {
+    // Key presence matters, not the value — a brand-new upload with zero
+    // views still has the viewCount key, unlike rights-gated content.
+    const item = makeYtItem({ statistics: { viewCount: "0", likeCount: "0", favoriteCount: "0" } });
+    expect(isPlayable(item)).toBe(true);
+  });
+});
+
 // ─── fetchAllCategories — two-pass 24h flow ───────────────────────────────────
 
 describe("fetchAllCategories — two-pass 24h fetch", () => {
@@ -191,15 +289,19 @@ describe("fetchAllCategories — two-pass 24h fetch", () => {
   });
 
   test("sorts results by viewCount descending after videos.list pass", async () => {
+    // Must supply ≥5 IDs so fetchCategory takes the primary (sorting) path
+    // rather than the mostPopular fallback.
     const items = [
-      makeYtItem({ id: "low",  statistics: { viewCount: "100",    likeCount: "1" } }),
-      makeYtItem({ id: "high", statistics: { viewCount: "5000000", likeCount: "1" } }),
-      makeYtItem({ id: "mid",  statistics: { viewCount: "250000",  likeCount: "1" } }),
+      makeYtItem({ id: "low",     statistics: { viewCount: "100",     likeCount: "1" } }),
+      makeYtItem({ id: "high",    statistics: { viewCount: "5000000", likeCount: "1" } }),
+      makeYtItem({ id: "mid",     statistics: { viewCount: "250000",  likeCount: "1" } }),
+      makeYtItem({ id: "lowish",  statistics: { viewCount: "900",     likeCount: "1" } }),
+      makeYtItem({ id: "highish", statistics: { viewCount: "800000",  likeCount: "1" } }),
     ];
     nock(YT_BASE)
       .get("/youtube/v3/search").query(true)
       .times(CAT_COUNT)
-      .reply(200, makeSearchResponse(["low", "high", "mid"]));
+      .reply(200, makeSearchResponse(["low", "high", "mid", "lowish", "highish"]));
     nock(YT_BASE)
       .get("/youtube/v3/videos").query(true)
       .times(CAT_COUNT)
@@ -207,8 +309,10 @@ describe("fetchAllCategories — two-pass 24h fetch", () => {
 
     const result = await fetchAllCategories("valid-key");
     const views = result.All.map((v) => v.views);
-    expect(views[0]).toBeGreaterThanOrEqual(views[1]);
-    expect(views[1]).toBeGreaterThanOrEqual(views[2]);
+    expect(views).toEqual([5000000, 800000, 250000, 900, 100]);
+    for (let i = 0; i < views.length - 1; i++) {
+      expect(views[i]).toBeGreaterThanOrEqual(views[i + 1]);
+    }
   });
 
   test("returns empty array for a category when both passes fail (not throwing)", async () => {
@@ -253,6 +357,72 @@ describe("fetchAllCategories — two-pass 24h fetch", () => {
     Object.values(result).forEach((videos) => {
       expect(videos).toEqual([]);
     });
+  });
+
+  test("filters out unplayable videos returned by videos.list", async () => {
+    // search returns 5 IDs, videos.list returns 5 items but 3 are unplayable
+    const items = [
+      makeYtItem({ id: "ok1",     statistics: { viewCount: "500", likeCount: "1" } }),
+      makeYtItem({ id: "private", status: { uploadStatus: "processed", privacyStatus: "private" } }),
+      makeYtItem({ id: "deleted", status: { uploadStatus: "deleted",   privacyStatus: "public"  } }),
+      makeYtItem({
+        id: "regionblocked",
+        contentDetails: { duration: "PT1M", regionRestriction: { blocked: ["US"] } },
+      }),
+      makeYtItem({ id: "ok2", statistics: { viewCount: "9000", likeCount: "1" } }),
+    ];
+    nock(YT_BASE)
+      .get("/youtube/v3/search").query(true)
+      .times(CAT_COUNT)
+      .reply(200, makeSearchResponse(["ok1", "private", "deleted", "regionblocked", "ok2"]));
+    nock(YT_BASE)
+      .get("/youtube/v3/videos").query(true)
+      .times(CAT_COUNT)
+      .reply(200, makeVideosResponse(items));
+
+    const result = await fetchAllCategories("valid-key");
+    const ids = result.All.map((v) => v.id);
+    expect(ids).toEqual(["ok2", "ok1"]); // sorted by views desc
+    expect(ids).not.toContain("private");
+    expect(ids).not.toContain("deleted");
+    expect(ids).not.toContain("regionblocked");
+  });
+
+  test("filters out unplayable videos in mostPopular fallback path", async () => {
+    // Force fallback by returning fewer than 5 search IDs
+    nock(YT_BASE)
+      .get("/youtube/v3/search").query(true)
+      .times(CAT_COUNT)
+      .reply(200, makeSearchResponse(["v1", "v2"]));
+    nock(YT_BASE)
+      .get("/youtube/v3/videos").query(true)
+      .times(CAT_COUNT)
+      .reply(200, makeVideosResponse([
+        makeYtItem({ id: "keep" }),
+        makeYtItem({ id: "drop", status: { uploadStatus: "processed", privacyStatus: "private" } }),
+      ]));
+
+    const result = await fetchAllCategories("valid-key");
+    const ids = result.All.map((v) => v.id);
+    expect(ids).toEqual(["keep"]);
+  });
+
+  test("implicitly drops videos that search returned but videos.list did not", async () => {
+    // search returns 5 IDs but videos.list only returns 2 (3 deleted/unavailable)
+    nock(YT_BASE)
+      .get("/youtube/v3/search").query(true)
+      .times(CAT_COUNT)
+      .reply(200, makeSearchResponse(["a", "b", "c", "d", "e"]));
+    nock(YT_BASE)
+      .get("/youtube/v3/videos").query(true)
+      .times(CAT_COUNT)
+      .reply(200, makeVideosResponse([
+        makeYtItem({ id: "a" }),
+        makeYtItem({ id: "b" }),
+      ]));
+
+    const result = await fetchAllCategories("valid-key");
+    expect(result.All.map((v) => v.id).sort()).toEqual(["a", "b"]);
   });
 
   test("publishedAfter param is included in search request", async () => {

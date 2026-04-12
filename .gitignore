@@ -1,4 +1,7 @@
 # Environment files — NEVER commit these
+.env
+.env.*
+!.env.example
 backend/.env
 
 # Dependencies
@@ -18,6 +21,7 @@ Thumbs.db
 # Logs
 *.log
 npm-debug.log*
+backend/logs/
 
 # Editor
 .vscode/

@@ -3,6 +3,11 @@ const logger = require("./logger");
 
 const YT_BASE = "https://www.googleapis.com/youtube/v3";
 const MAX_RESULTS = 15; // expanded from 10
+const REGION = "US";
+
+// Parts requested from videos.list — status and contentDetails are required
+// so we can filter out unplayable videos (private, deleted, region-blocked, etc).
+const VIDEO_PARTS = "snippet,statistics,status,contentDetails";
 
 const YT_CATEGORIES = {
   "0":  "All",
@@ -33,6 +38,55 @@ function validateApiKey(key) {
  */
 function get24HoursAgo() {
   return new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+}
+
+/**
+ * Returns true if a raw YouTube video item is playable via its public watch URL.
+ *
+ * Excludes videos that:
+ *   - Are missing id/snippet (malformed response)
+ *   - Aren't fully processed (uploadStatus ≠ "processed" → deleted/failed/rejected)
+ *   - Aren't public (privacyStatus ≠ "public" → private/unlisted)
+ *   - Are region-blocked in our target region (US)
+ *   - Have an allow-list that excludes our target region
+ *   - Are missing `statistics.viewCount` — reliable signal the video is
+ *     rights-gated or otherwise unavailable for playback even though the
+ *     Data API reports it as public. Observed on ESPN / NFL-style broadcasts
+ *     where videos.list returns `statistics: { favoriteCount: "0" }` (no
+ *     viewCount key) and the watch page returns
+ *     `playabilityStatus: { status: "ERROR", reason: "Video unavailable" }`.
+ *     Note: genuinely fresh uploads with zero views still have the
+ *     `viewCount` key present with value "0", so this check won't drop them.
+ *
+ * Videos returned by search.list but absent from videos.list are implicitly
+ * filtered (deleted or made private between the two calls).
+ */
+function isPlayable(item) {
+  if (!item || !item.id || !item.snippet) return false;
+
+  const status = item.status || {};
+  if (status.uploadStatus && status.uploadStatus !== "processed") return false;
+  if (status.privacyStatus && status.privacyStatus !== "public") return false;
+
+  // Missing viewCount key → rights-gated or unavailable for playback.
+  // We intentionally check key presence, not value, so a legit "0"-view
+  // fresh upload still passes.
+  const stats = item.statistics;
+  if (!stats || stats.viewCount === undefined || stats.viewCount === null) {
+    return false;
+  }
+
+  const restriction = item.contentDetails?.regionRestriction;
+  if (restriction) {
+    if (Array.isArray(restriction.blocked) && restriction.blocked.includes(REGION)) {
+      return false;
+    }
+    if (Array.isArray(restriction.allowed) && !restriction.allowed.includes(REGION)) {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 /**
@@ -98,14 +152,23 @@ async function fetchCategory(client, apiKey, catId, catName) {
       // ── Pass 2: fetch full details for found IDs ────────────────────────
       const detailRes = await client.get(`${YT_BASE}/videos`, {
         params: {
-          part: "snippet,statistics",
+          part: VIDEO_PARTS,
           id: videoIds.join(","),
           key: apiKey,
         },
       });
 
+      const rawItems = detailRes.data?.items || [];
+      const playable = rawItems.filter(isPlayable);
+      const droppedCount = rawItems.length - playable.length;
+      if (droppedCount > 0) {
+        logger.info(
+          `YouTube: dropped ${droppedCount} unplayable video(s) in "${catName}"`
+        );
+      }
+
       // Sort by viewCount descending (search order isn't guaranteed)
-      videos = (detailRes.data?.items || [])
+      videos = playable
         .map(normalizeVideo)
         .filter(Boolean)
         .sort((a, b) => b.views - a.views);
@@ -116,18 +179,24 @@ async function fetchCategory(client, apiKey, catId, catName) {
         `YouTube: insufficient 24h results for "${catName}" (${videoIds.length}), falling back to mostPopular`
       );
       const fallbackParams = {
-        part: "snippet,statistics",
+        part: VIDEO_PARTS,
         chart: "mostPopular",
-        regionCode: "US",
+        regionCode: REGION,
         maxResults: MAX_RESULTS,
         key: apiKey,
       };
       if (catId !== "0") fallbackParams.videoCategoryId = catId;
 
       const fallbackRes = await client.get(`${YT_BASE}/videos`, { params: fallbackParams });
-      videos = (fallbackRes.data?.items || [])
-        .map(normalizeVideo)
-        .filter(Boolean);
+      const rawItems = fallbackRes.data?.items || [];
+      const playable = rawItems.filter(isPlayable);
+      const droppedCount = rawItems.length - playable.length;
+      if (droppedCount > 0) {
+        logger.info(
+          `YouTube: dropped ${droppedCount} unplayable video(s) in "${catName}" fallback`
+        );
+      }
+      videos = playable.map(normalizeVideo).filter(Boolean);
     }
 
     logger.info(`YouTube: fetched ${videos.length} videos for "${catName}"`);
@@ -169,4 +238,4 @@ async function fetchAllCategories(apiKey) {
   return results;
 }
 
-module.exports = { fetchAllCategories, normalizeVideo, validateApiKey, YT_CATEGORIES };
+module.exports = { fetchAllCategories, normalizeVideo, isPlayable, validateApiKey, YT_CATEGORIES };
