@@ -1,6 +1,14 @@
 require("./setup");
 const nock = require("nock");
-const { fetchAllCategories, normalizeVideo, isPlayable, validateApiKey, YT_CATEGORIES } = require("../src/youtubeService");
+const {
+  fetchAllCategories,
+  normalizeVideo,
+  isPlayable,
+  isRecent,
+  validateApiKey,
+  YT_CATEGORIES,
+  MAX_AGE_MS,
+} = require("../src/youtubeService");
 
 const YT_BASE = "https://www.googleapis.com";
 
@@ -223,6 +231,78 @@ describe("isPlayable", () => {
   });
 });
 
+// ─── isRecent ─────────────────────────────────────────────────────────────────
+
+function itemPublishedHoursAgo(hours, overrides = {}) {
+  const publishedAt = new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
+  const item = makeYtItem(overrides);
+  item.snippet.publishedAt = publishedAt;
+  return item;
+}
+
+describe("isRecent", () => {
+  test("MAX_AGE_MS is 26 hours in ms", () => {
+    expect(MAX_AGE_MS).toBe(26 * 60 * 60 * 1000);
+  });
+
+  test("accepts a video published 5h ago", () => {
+    expect(isRecent(itemPublishedHoursAgo(5))).toBe(true);
+  });
+
+  test("accepts a video published exactly within the window (25h ago)", () => {
+    expect(isRecent(itemPublishedHoursAgo(25))).toBe(true);
+  });
+
+  test("accepts a video published at the 26h boundary", () => {
+    // At exactly 26h, (nowMs - ts) === MAX_AGE_MS → included by the `<=` check.
+    const pa = new Date(Date.now() - MAX_AGE_MS).toISOString();
+    const item = makeYtItem();
+    item.snippet.publishedAt = pa;
+    expect(isRecent(item)).toBe(true);
+  });
+
+  test("rejects a video published 27h ago", () => {
+    expect(isRecent(itemPublishedHoursAgo(27))).toBe(false);
+  });
+
+  test("rejects a video published 10 days ago", () => {
+    expect(isRecent(itemPublishedHoursAgo(240))).toBe(false);
+  });
+
+  test("rejects items with no publishedAt", () => {
+    const item = makeYtItem();
+    delete item.snippet.publishedAt;
+    expect(isRecent(item)).toBe(false);
+  });
+
+  test("rejects items with unparseable publishedAt", () => {
+    const item = makeYtItem();
+    item.snippet.publishedAt = "not-a-date";
+    expect(isRecent(item)).toBe(false);
+  });
+
+  test("rejects null/undefined input", () => {
+    expect(isRecent(null)).toBe(false);
+    expect(isRecent(undefined)).toBe(false);
+    expect(isRecent({})).toBe(false);
+  });
+
+  test("honours the nowMs parameter for deterministic testing", () => {
+    // Item published at a fixed timestamp
+    const fixedPa = "2026-04-11T00:00:00.000Z";
+    const item = makeYtItem();
+    item.snippet.publishedAt = fixedPa;
+
+    const ts = Date.parse(fixedPa);
+    // now = ts + 10h → recent
+    expect(isRecent(item, ts + 10 * 3600 * 1000)).toBe(true);
+    // now = ts + 27h → stale
+    expect(isRecent(item, ts + 27 * 3600 * 1000)).toBe(false);
+    // now = ts + 26h exactly → boundary accepted
+    expect(isRecent(item, ts + 26 * 3600 * 1000)).toBe(true);
+  });
+});
+
 // ─── fetchAllCategories — two-pass 24h flow ───────────────────────────────────
 
 describe("fetchAllCategories — two-pass 24h fetch", () => {
@@ -405,6 +485,80 @@ describe("fetchAllCategories — two-pass 24h fetch", () => {
     const result = await fetchAllCategories("valid-key");
     const ids = result.All.map((v) => v.id);
     expect(ids).toEqual(["keep"]);
+  });
+
+  test("drops out-of-window (>26h) videos on the primary path", async () => {
+    // Mix of recent and stale publishedAt values — only the recent ones
+    // should survive the isRecent filter.
+    const recent1 = makeYtItem({ id: "recent1", statistics: { viewCount: "5000", likeCount: "1" } });
+    recent1.snippet.publishedAt = new Date(Date.now() - 2 * 3600 * 1000).toISOString();
+    const recent2 = makeYtItem({ id: "recent2", statistics: { viewCount: "9000", likeCount: "1" } });
+    recent2.snippet.publishedAt = new Date(Date.now() - 20 * 3600 * 1000).toISOString();
+    const stale1  = makeYtItem({ id: "stale1",  statistics: { viewCount: "100000", likeCount: "1" } });
+    stale1.snippet.publishedAt  = new Date(Date.now() - 48 * 3600 * 1000).toISOString();
+    const stale2  = makeYtItem({ id: "stale2",  statistics: { viewCount: "200000", likeCount: "1" } });
+    stale2.snippet.publishedAt  = new Date(Date.now() - 7 * 24 * 3600 * 1000).toISOString();
+    const missing = makeYtItem({ id: "missing" });
+    delete missing.snippet.publishedAt;
+
+    nock(YT_BASE)
+      .get("/youtube/v3/search").query(true)
+      .times(CAT_COUNT)
+      .reply(200, makeSearchResponse(["recent1", "recent2", "stale1", "stale2", "missing"]));
+    nock(YT_BASE)
+      .get("/youtube/v3/videos").query(true)
+      .times(CAT_COUNT)
+      .reply(200, makeVideosResponse([recent1, recent2, stale1, stale2, missing]));
+
+    const result = await fetchAllCategories("valid-key");
+    const ids = result.All.map((v) => v.id);
+    expect(ids.sort()).toEqual(["recent1", "recent2"]); // stale and missing dropped
+    // Sanity: every returned video is within the 26h window
+    for (const v of result.All) {
+      const age = Date.now() - Date.parse(v.publishedAt);
+      expect(age).toBeLessThanOrEqual(26 * 3600 * 1000);
+    }
+  });
+
+  test("drops out-of-window videos on the mostPopular fallback path", async () => {
+    // Force fallback with <5 search IDs.
+    const recent = makeYtItem({ id: "recentOne" });
+    recent.snippet.publishedAt = new Date(Date.now() - 3 * 3600 * 1000).toISOString();
+    const stale  = makeYtItem({ id: "staleOne" });
+    stale.snippet.publishedAt  = new Date(Date.now() - 72 * 3600 * 1000).toISOString();
+
+    nock(YT_BASE)
+      .get("/youtube/v3/search").query(true)
+      .times(CAT_COUNT)
+      .reply(200, makeSearchResponse(["v1", "v2"]));
+    nock(YT_BASE)
+      .get("/youtube/v3/videos").query(true)
+      .times(CAT_COUNT)
+      .reply(200, makeVideosResponse([recent, stale]));
+
+    const result = await fetchAllCategories("valid-key");
+    expect(result.All.map((v) => v.id)).toEqual(["recentOne"]);
+  });
+
+  test("returns empty category when every video is out-of-window (option A: show empty)", async () => {
+    // All 5 items are 3+ days old → category should end up empty instead of
+    // falling back to old content. This is the "honest Past 24h" promise.
+    const items = Array.from({ length: 5 }, (_, i) => {
+      const it = makeYtItem({ id: `old${i}`, statistics: { viewCount: String(10000 + i), likeCount: "1" } });
+      it.snippet.publishedAt = new Date(Date.now() - (72 + i) * 3600 * 1000).toISOString();
+      return it;
+    });
+    nock(YT_BASE)
+      .get("/youtube/v3/search").query(true)
+      .times(CAT_COUNT)
+      .reply(200, makeSearchResponse(items.map((i) => i.id)));
+    nock(YT_BASE)
+      .get("/youtube/v3/videos").query(true)
+      .times(CAT_COUNT)
+      .reply(200, makeVideosResponse(items));
+
+    const result = await fetchAllCategories("valid-key");
+    Object.values(result).forEach((vids) => expect(vids).toEqual([]));
   });
 
   test("implicitly drops videos that search returned but videos.list did not", async () => {

@@ -5,6 +5,16 @@ const YT_BASE = "https://www.googleapis.com/youtube/v3";
 const MAX_RESULTS = 15; // expanded from 10
 const REGION = "US";    // used for both the search regionCode and the isPlayable region-restriction check
 
+// Recency window for the "Past 24h" promise. Set to 26h instead of a strict
+// 24h to absorb two real-world sources of drift:
+//   1. `search.list?publishedAfter` is fuzzy — YouTube sometimes returns
+//      videos an hour or two past the boundary we asked for.
+//   2. We cache responses for 30 min, so a video that was 23.8h old when
+//      we fetched will appear 24.3h old by the time the cache expires.
+// A hard 24h cutoff would drop legitimately-trending videos caught by both;
+// 26h is honest enough that the "Past 24h" badge isn't a lie.
+const MAX_AGE_MS = 26 * 60 * 60 * 1000;
+
 // Parts requested from videos.list. EACH PART IS LOAD-BEARING for isPlayable():
 //   - snippet        → title, channel, thumbnails, description (for UI)
 //   - statistics     → viewCount presence check (rights-gated filter)
@@ -96,6 +106,27 @@ function isPlayable(item) {
 }
 
 /**
+ * Returns true if a raw YouTube video item was published within the
+ * `MAX_AGE_MS` window relative to `nowMs` (defaults to the current time).
+ *
+ * This is the client-side enforcement of the "Past 24h" promise. It runs
+ * in addition to the `search.list?publishedAfter` request parameter because
+ * YouTube's date filter is fuzzy at the edges AND because the `mostPopular`
+ * fallback chart has no date filter at all. Without this function, niche
+ * categories silently show videos from days or weeks ago.
+ *
+ * `nowMs` is injected for testability — production callers pass `Date.now()`.
+ * Returns false for items with missing or unparseable `publishedAt`.
+ */
+function isRecent(item, nowMs = Date.now()) {
+  const pa = item?.snippet?.publishedAt;
+  if (!pa) return false;
+  const ts = Date.parse(pa);
+  if (Number.isNaN(ts)) return false;
+  return (nowMs - ts) <= MAX_AGE_MS;
+}
+
+/**
  * Normalises a raw YouTube video item into the shape consumed by the frontend.
  * Handles missing/null fields gracefully as defence-in-depth — in the normal
  * flow, items reach this function only after passing `isPlayable()`, so the
@@ -134,10 +165,17 @@ function normalizeVideo(item) {
  * returns fewer than 5 IDs — some niche categories have thin 24h coverage
  * and we'd rather show yesterday's popular videos than an empty section.
  *
- * The `isPlayable()` filter is applied on BOTH paths, before normalisation,
- * so unplayable videos (private, deleted, region-blocked, rights-gated) are
- * dropped in every code path. Dropped counts are logged at info level so
- * you can see filter activity in `backend/logs/`.
+ * Two filters are applied on BOTH paths, in order, before normalisation:
+ *   1. `isPlayable()` — drops private/deleted/region-blocked/rights-gated.
+ *   2. `isRecent()`   — drops anything outside the `MAX_AGE_MS` window
+ *                        (the "Past 24h" promise, with slack). Especially
+ *                        important for the fallback path, which has no
+ *                        date filter on the YouTube side and would
+ *                        otherwise leak week-old videos into niche
+ *                        categories.
+ *
+ * Dropped counts are logged at info level for each filter so you can see
+ * filter activity in `backend/logs/combined.log`.
  *
  * Errors are swallowed and return `[]` so one bad category doesn't take
  * down the whole dashboard — except 403 (quota/key) which re-throws because
@@ -146,6 +184,10 @@ function normalizeVideo(item) {
 async function fetchCategory(client, apiKey, catId, catName) {
   try {
     const publishedAfter = get24HoursAgo();
+    // Single `now` anchor for every recency check in this call, so that
+    // items fetched ~milliseconds apart aren't judged against different
+    // cutoffs.
+    const nowMs = Date.now();
 
     // ── Pass 1: search for recent videos in this category ──────────────────
     const searchParams = {
@@ -179,15 +221,22 @@ async function fetchCategory(client, apiKey, catId, catName) {
 
       const rawItems = detailRes.data?.items || [];
       const playable = rawItems.filter(isPlayable);
-      const droppedCount = rawItems.length - playable.length;
-      if (droppedCount > 0) {
+      const recent   = playable.filter((it) => isRecent(it, nowMs));
+      const droppedUnplayable = rawItems.length - playable.length;
+      const droppedStale      = playable.length - recent.length;
+      if (droppedUnplayable > 0) {
         logger.info(
-          `YouTube: dropped ${droppedCount} unplayable video(s) in "${catName}"`
+          `YouTube: dropped ${droppedUnplayable} unplayable video(s) in "${catName}"`
+        );
+      }
+      if (droppedStale > 0) {
+        logger.info(
+          `YouTube: dropped ${droppedStale} out-of-window video(s) in "${catName}" (>26h old)`
         );
       }
 
       // Sort by viewCount descending (search order isn't guaranteed)
-      videos = playable
+      videos = recent
         .map(normalizeVideo)
         .filter(Boolean)
         .sort((a, b) => b.views - a.views);
@@ -209,13 +258,23 @@ async function fetchCategory(client, apiKey, catId, catName) {
       const fallbackRes = await client.get(`${YT_BASE}/videos`, { params: fallbackParams });
       const rawItems = fallbackRes.data?.items || [];
       const playable = rawItems.filter(isPlayable);
-      const droppedCount = rawItems.length - playable.length;
-      if (droppedCount > 0) {
+      // The fallback chart (`mostPopular`) has no date filter on the YouTube
+      // side, so we MUST apply the local recency cutoff here — otherwise
+      // niche categories leak week-old videos into the "Past 24h" list.
+      const recent   = playable.filter((it) => isRecent(it, nowMs));
+      const droppedUnplayable = rawItems.length - playable.length;
+      const droppedStale      = playable.length - recent.length;
+      if (droppedUnplayable > 0) {
         logger.info(
-          `YouTube: dropped ${droppedCount} unplayable video(s) in "${catName}" fallback`
+          `YouTube: dropped ${droppedUnplayable} unplayable video(s) in "${catName}" fallback`
         );
       }
-      videos = playable.map(normalizeVideo).filter(Boolean);
+      if (droppedStale > 0) {
+        logger.info(
+          `YouTube: dropped ${droppedStale} out-of-window video(s) in "${catName}" fallback (>26h old)`
+        );
+      }
+      videos = recent.map(normalizeVideo).filter(Boolean);
     }
 
     logger.info(`YouTube: fetched ${videos.length} videos for "${catName}"`);
@@ -257,4 +316,12 @@ async function fetchAllCategories(apiKey) {
   return results;
 }
 
-module.exports = { fetchAllCategories, normalizeVideo, isPlayable, validateApiKey, YT_CATEGORIES };
+module.exports = {
+  fetchAllCategories,
+  normalizeVideo,
+  isPlayable,
+  isRecent,
+  validateApiKey,
+  YT_CATEGORIES,
+  MAX_AGE_MS,
+};

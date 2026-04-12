@@ -138,7 +138,7 @@ docker compose --profile test run --rm test
 | File | Tests |
 |------|------:|
 | `backend/tests/api.test.js` | 32 |
-| `backend/tests/youtubeService.test.js` | 39 |
+| `backend/tests/youtubeService.test.js` | 52 |
 | `backend/tests/hackerNewsService.test.js` | 17 |
 | `backend/tests/githubTrendingService.test.js` | 14 |
 | `backend/tests/devtoService.test.js` | 20 |
@@ -172,6 +172,32 @@ Videos are dropped when **any** of the following is true:
 | Region-blocked | `contentDetails.regionRestriction.blocked` contains `US` |
 | Region allow-list excludes US | `contentDetails.regionRestriction.allowed` set and excludes `US` |
 | Rights-gated / broken | `statistics.viewCount` **key is missing entirely** (empirically correlates with `playabilityStatus: ERROR` on the watch page) |
+| Outside the recency window | `snippet.publishedAt` older than **26 hours** (see "Past-24h enforcement" below) |
+
+### Past-24h enforcement (recency filter)
+
+The "Trending · Past 24h" badge would be a lie if we trusted only the
+`publishedAfter` parameter on `search.list`, because:
+
+1. **`search.list?publishedAfter` is fuzzy** — YouTube sometimes returns
+   videos an hour or two past the boundary we asked for.
+2. **The `mostPopular` fallback chart has no date filter at all.** When
+   `search.list` returns fewer than 5 recent videos for a niche category
+   (Music, Pets & Animals, Science & Technology, etc.), we fall back to
+   the most-popular chart — which silently leaked week-old and
+   month-old videos until we added this filter.
+
+So `isRecent(item, nowMs)` runs locally as a second-stage filter on every
+video from both paths, with a **26-hour window** (24h promise + 2h slack
+to absorb API drift and the 30-minute cache TTL). Videos with missing or
+unparseable `publishedAt` are also dropped.
+
+**Consequence:** when a niche category genuinely has no trending video
+in the last 26h, its tab will show "No videos found for this category."
+This is intentional — better to show an empty section than to show
+stale content under a "Past 24h" label. (This was chosen over the
+alternative of relabeling fallback tabs as "Popular" — too much
+frontend complexity for little gain.)
 
 The filter requires `status` and `contentDetails` to be in the
 `videos.list` `part` parameter — they are bundled into the

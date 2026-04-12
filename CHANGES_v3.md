@@ -1,5 +1,69 @@
 # TrendPulse — Changelog
 
+## v3.2 — YouTube Past-24h Enforcement (2026-04-11)
+
+### Problem
+The "Trending · Past 24h" badge was aspirational, not enforced. A live
+audit of the API right after v3.1 shipped showed that out of **161
+videos returned** across all categories, **only 18** were actually
+from the past 24 hours. Some categories (Music, Pets & Animals,
+Comedy, Entertainment, Science & Technology) had **zero** videos
+within the window — the oldest "trending" video was ~12 days old.
+
+Two root causes:
+
+1. **The `mostPopular` fallback chart has no date filter.** When
+   `search.list` returned fewer than 5 recent videos for a niche
+   category, we fell back to the most-popular chart and silently
+   pulled week-old and month-old videos into the "Past 24h" list.
+2. **`search.list?publishedAfter` is fuzzy.** Even on the primary
+   path, YouTube occasionally returned videos 5–10 hours past the
+   boundary we asked for.
+
+### Fix
+Added `isRecent(item, nowMs)` and a `MAX_AGE_MS = 26 * 60 * 60 * 1000`
+constant to `backend/src/youtubeService.js`. The filter runs locally
+on every video from both the primary and fallback paths, after
+`isPlayable()`, before normalisation and sorting. The window is
+**26 hours** (not 24) to absorb:
+
+- YouTube `search.list` fuzziness at the boundary
+- The 30-minute cache TTL (a video that was 23.8h old when fetched
+  would otherwise be 24.3h old at the end of its cache lifetime)
+
+The `nowMs` parameter is injected for deterministic testing — production
+callers pass `Date.now()`. Dropped-by-age counts are logged separately
+from dropped-by-unplayable counts so `backend/logs/combined.log` lets
+you see which filter is doing the work per category per refresh.
+
+### User-visible behaviour
+- The "Past 24h" badge is now **honest**. If the API says a video is
+  older than 26h, it is not in the dashboard.
+- Niche categories that genuinely lack 24h trending content now
+  display `"No videos found for this category."` — "Option A" per
+  the design discussion. This was chosen over relabeling fallback
+  tabs as "Popular" to avoid frontend complexity for a rare case.
+- Expect to see categories with visibly thinner video counts,
+  especially for non-peak hours.
+
+### Tests
+`backend/tests/youtubeService.test.js` grew from 39 → 52 tests:
+
+- 10 new `isRecent()` unit tests covering 5h/25h/26h-boundary/27h/10-day
+  cases, missing `publishedAt`, unparseable `publishedAt`, null input,
+  and deterministic `nowMs` injection
+- 3 new `fetchAllCategories` integration tests for the recency filter
+  on the primary path, fallback path, and the all-stale-category case
+  (Option A — empty result, no silent fallback to old content)
+
+### Config knob
+If you need to widen the window in the future (e.g. for timezones
+where "trending" operates on a different clock), edit `MAX_AGE_MS`
+at the top of `backend/src/youtubeService.js`. That constant is
+exported from the module so tests can assert on it.
+
+---
+
 ## v3.1 — YouTube Playability Filter (2026-04-11)
 
 ### Problem
